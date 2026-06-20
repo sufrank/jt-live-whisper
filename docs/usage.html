@@ -31,7 +31,7 @@
       <a href="#hardware"><span class="zh">硬體建議</span><span class="en">Hardware</span></a>
       <a href="features.html"><span class="zh">功能詳解</span><span class="en">Features</span></a>
       <a href="sop.html"><span class="zh">完整手冊</span><span class="en">Manual</span></a>
-      <a class="btn btn-ghost btn-sm" href="https://github.com/jasoncheng7115/jt-live-whisper" target="_blank" rel="noopener">GitHub</a>
+      <a class="btn btn-ghost btn-sm" href="https://github.com/sufrank/jt-live-whisper" target="_blank" rel="noopener">GitHub</a>
       <button class="btn btn-ghost btn-sm" id="langBtn" type="button">English</button>
     </div>
   </div>
@@ -44,7 +44,7 @@
     <p class="lead"><span class="zh">系統需求、音訊裝置設定、互動式選單、命令列參數與硬體建議——把整份操作手冊濃縮在這裡。需要逐步細節，請看<a href="sop.html">完整使用手冊</a>。</span><span class="en">Requirements, audio setup, the interactive menu, CLI flags and hardware tips — the whole manual, condensed. For step-by-step detail, see the <a href="sop.html">full manual</a>.</span></p>
     <div class="cta" style="margin-top:24px">
       <a class="btn btn-primary" href="sop.html"><span class="zh">完整使用手冊</span><span class="en">Full manual</span></a>
-      <a class="btn btn-ghost" href="https://github.com/jasoncheng7115/jt-live-whisper/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a>
+      <a class="btn btn-ghost" href="https://github.com/sufrank/jt-live-whisper/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a>
     </div>
   </div>
 </header>
@@ -93,11 +93,11 @@
     <h3 style="margin:0 0 10px"><span class="zh">1. 三行指令安裝</span><span class="en">1. Install in 3 commands</span></h3>
     <div class="cmd-label">macOS</div>
 <pre>mkdir -p ~/Apps/jt-live-whisper &amp;&amp; cd ~/Apps/jt-live-whisper
-curl -fsSL https://raw.githubusercontent.com/jasoncheng7115/jt-live-whisper/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/sufrank/jt-live-whisper/main/install.sh -o install.sh
 <span class="g">bash</span> install.sh</pre>
     <div class="cmd-label">Windows (PowerShell)</div>
 <pre>mkdir C:\jt-live-whisper -Force | Out-Null; cd C:\jt-live-whisper
-irm https://raw.githubusercontent.com/jasoncheng7115/jt-live-whisper/main/install.ps1 -OutFile install.ps1
+irm https://raw.githubusercontent.com/sufrank/jt-live-whisper/main/install.ps1 -OutFile install.ps1
 <span class="g">powershell</span> -ExecutionPolicy Bypass -File install.ps1</pre>
     <p class="note"><span class="zh">安裝腳本會自動下載並設定所有地端 AI 模型和相依套件。最後會詢問是否設定 GPU 語音辨識伺服器（選填）。首次安裝約 10–20 分鐘（視網路速度，macOS 需額外編譯 whisper.cpp）。</span><span class="en">The installer downloads and configures all local AI models and dependencies, then offers optional GPU-server setup. First run ~10–20 min (macOS also compiles whisper.cpp).</span></p>
 
@@ -363,7 +363,7 @@ webui.py (FastAPI + WebSocket)
       <a href="index.html"><span class="zh">首頁</span><span class="en">Home</span></a> ·
       <a href="features.html"><span class="zh">功能詳解</span><span class="en">Features</span></a> ·
       <a href="sop.html"><span class="zh">完整手冊</span><span class="en">Manual</span></a> ·
-      <a href="https://github.com/jasoncheng7115/jt-live-whisper" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/sufrank/jt-live-whisper" target="_blank" rel="noopener">GitHub</a>
     </div>
   </div>
 </footer>

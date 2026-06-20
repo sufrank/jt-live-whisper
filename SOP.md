@@ -264,7 +264,7 @@ Windows 不需要安裝額外的虛擬音訊驅動。程式透過 WASAPI Loopbac
 
 ```bash
 mkdir -p ~/Apps/jt-live-whisper && cd ~/Apps/jt-live-whisper
-curl -fsSL https://raw.githubusercontent.com/jasoncheng7115/jt-live-whisper/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/sufrank/jt-live-whisper/main/install.sh -o install.sh
 bash install.sh
 ```
 
@@ -279,7 +279,7 @@ mkdir C:\jt-live-whisper -Force | Out-Null; cd C:\jt-live-whisper
 下載安裝程式：
 
 ```powershell
-irm https://raw.githubusercontent.com/jasoncheng7115/jt-live-whisper/main/install.ps1 -OutFile install.ps1
+irm https://raw.githubusercontent.com/sufrank/jt-live-whisper/main/install.ps1 -OutFile install.ps1
 ```
 
 執行安裝：

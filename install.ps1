@@ -50,8 +50,8 @@ $SCRIPT_DIR = if ($MyInvocation.MyCommand.Path) {
 } else {
     $PWD.Path
 }
-$GITHUB_REPO    = "https://github.com/jasoncheng7115/jt-live-whisper.git"
-$GITHUB_ZIP     = "https://github.com/jasoncheng7115/jt-live-whisper/archive/refs/heads/main.zip"
+$GITHUB_REPO    = "https://github.com/sufrank/jt-live-whisper.git"
+$GITHUB_ZIP     = "https://github.com/sufrank/jt-live-whisper/archive/refs/heads/main.zip"
 
 # ─── Bootstrap：透過 irm | iex 執行時，自動下載並安裝 ─────────
 if (-not (Test-Path (Join-Path $SCRIPT_DIR "translate_meeting.py"))) {

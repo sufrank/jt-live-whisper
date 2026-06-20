@@ -31,7 +31,7 @@ if [ -n "$_UPDATE_TMP" ]; then
     trap 'rm -f "$_UPDATE_TMP" 2>/dev/null' EXIT
     (
         _rv=$(curl -s --max-time 3 -r 0-10240 \
-            "https://raw.githubusercontent.com/jasoncheng7115/jt-live-whisper/main/translate_meeting.py" \
+            "https://raw.githubusercontent.com/sufrank/jt-live-whisper/main/translate_meeting.py" \
             2>/dev/null | grep -m1 'APP_VERSION' | sed 's/.*"\(.*\)".*/\1/')
         echo "$_rv" > "$_UPDATE_TMP" 2>/dev/null
     ) &

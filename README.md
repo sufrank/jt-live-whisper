@@ -5,6 +5,9 @@
 ### 🌐 專案網站：**[jasoncheng7115.github.io/jt-live-whisper](https://jasoncheng7115.github.io/jt-live-whisper/)**
 
 > 功能介紹、畫面導覽、安裝與使用說明，都整理在專案網站上。
+>
+> 來源說明：本 repository 為 `sufrank/jt-live-whisper`，上游來源（upstream）為 `jasoncheng7115/jt-live-whisper`：
+> `https://github.com/jasoncheng7115/jt-live-whisper`
 
 | **目錄** | [核心功能](#核心功能) · [其他特色](#其他特色) · [系統需求](#系統需求) · [快速開始](#快速開始) · [使用方式](#使用方式) · [互動式選單](#互動式選單功能一覽) · [命令列參數](#命令列參數) · [技術架構](#技術架構) · [硬體建議](#硬體建議) · [升級](#升級) |
 |---|---|
@@ -254,7 +257,7 @@ Author: Jason Cheng (Jason Tools)
 
 ```bash
 mkdir -p ~/Apps/jt-live-whisper && cd ~/Apps/jt-live-whisper
-curl -fsSL https://raw.githubusercontent.com/jasoncheng7115/jt-live-whisper/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/sufrank/jt-live-whisper/main/install.sh -o install.sh
 bash install.sh
 ```
 
@@ -269,7 +272,7 @@ mkdir C:\jt-live-whisper -Force | Out-Null; cd C:\jt-live-whisper
 下載安裝程式：
 
 ```powershell
-irm https://raw.githubusercontent.com/jasoncheng7115/jt-live-whisper/main/install.ps1 -OutFile install.ps1
+irm https://raw.githubusercontent.com/sufrank/jt-live-whisper/main/install.ps1 -OutFile install.ps1
 ```
 
 執行安裝：

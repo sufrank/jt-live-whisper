@@ -1,13 +1,13 @@
 #!/bin/bash
 # 即時英翻中字幕系統 - 安裝腳本
 # 檢查並安裝所有必要的依賴項目
-# 支援一鍵安裝：curl -fsSL https://raw.githubusercontent.com/jasoncheng7115/jt-live-whisper/main/install.sh | bash
+# 支援一鍵安裝：curl -fsSL https://raw.githubusercontent.com/sufrank/jt-live-whisper/main/install.sh | bash
 # Author: Jason Cheng (Jason Tools)
 
 set -e
 
-GITHUB_REPO="https://github.com/jasoncheng7115/jt-live-whisper.git"
-GITHUB_RAW="https://raw.githubusercontent.com/jasoncheng7115/jt-live-whisper/main"
+GITHUB_REPO="https://github.com/sufrank/jt-live-whisper.git"
+GITHUB_RAW="https://raw.githubusercontent.com/sufrank/jt-live-whisper/main"
 
 # ─── Bootstrap：透過 curl | bash 執行時，自動下載並安裝 ───
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
@@ -29,7 +29,7 @@ if [ ! -f "$SCRIPT_DIR/translate_meeting.py" ] && [ "$_is_upgrade" = false ]; th
         echo -e "\033[38;2;255;255;255m正在從 GitHub 下載 jt-live-whisper...\033[0m"
         tmp_zip="/tmp/jt-live-whisper-$$.zip"
         tmp_extract="/tmp/jt-extract-$$"
-        curl -fsSL "https://github.com/jasoncheng7115/jt-live-whisper/archive/refs/heads/main.zip" -o "$tmp_zip"
+        curl -fsSL "https://github.com/sufrank/jt-live-whisper/archive/refs/heads/main.zip" -o "$tmp_zip"
         if [ ! -f "$tmp_zip" ]; then
             echo -e "\033[38;2;255;80;80m[錯誤] 下載失敗，請檢查網路連線\033[0m"
             exit 1
@@ -1208,7 +1208,7 @@ do_upgrade() {
 
     echo -e "  ${C_DIM}正在從 GitHub 下載最新版本...${NC}"
     local zip_path="$tmp_dir/jt-live-whisper.zip"
-    if ! curl -fsSL "https://github.com/jasoncheng7115/jt-live-whisper/archive/refs/heads/main.zip" -o "$zip_path"; then
+    if ! curl -fsSL "https://github.com/sufrank/jt-live-whisper/archive/refs/heads/main.zip" -o "$zip_path"; then
         check_fail "無法連接 GitHub，請檢查網路連線"
         return 1
     fi

@@ -108,7 +108,7 @@ Write-Host ""
 $updateJob = Start-Job -ScriptBlock {
     try {
         $ProgressPreference = 'SilentlyContinue'
-        $resp = Invoke-WebRequest -Uri "https://raw.githubusercontent.com/jasoncheng7115/jt-live-whisper/main/translate_meeting.py" `
+        $resp = Invoke-WebRequest -Uri "https://raw.githubusercontent.com/sufrank/jt-live-whisper/main/translate_meeting.py" `
             -TimeoutSec 3 -UseBasicParsing -Headers @{ Range = "bytes=0-10240" } -ErrorAction Stop
         $content = $resp.Content
         if ($content -match 'APP_VERSION\s*=\s*"([^"]+)"') {
