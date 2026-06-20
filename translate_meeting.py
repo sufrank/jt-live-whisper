@@ -103,6 +103,7 @@ import json
 import urllib.request
 
 import ctranslate2
+import numpy as np
 import sentencepiece
 
 # OpenCC 簡體→台灣繁體轉換（用於 ASR 辨識結果；LLM 翻譯結果由 prompt 控制，不經 S2TWP）
@@ -796,7 +797,26 @@ MOONSHINE_MODELS = [
 ASR_ENGINES = [
     ("whisper", "Whisper", "高準確度，完整斷句，支援中英文（推薦）"),
     ("moonshine", "Moonshine", "真串流，低延遲，僅英文"),
+    ("qwen", "QwenASR", "停頓觸發辨識，規劃支援 OpenVINO / Vulkan"),
 ]
+
+CHUNK_MODES = [
+    ("pause_vad", "停頓自動辨識"),
+    ("fixed", "固定週期"),
+]
+
+QWEN_BACKENDS = [
+    ("auto", "自動"),
+    ("openvino", "OpenVINO"),
+    ("vulkan", "Vulkan"),
+]
+
+DEFAULT_CHUNK_MODE = "pause_vad"
+DEFAULT_QWEN_BACKEND = "auto"
+DEFAULT_PAUSE_MS = 800
+DEFAULT_MIN_SPEECH_MS = 250
+DEFAULT_MAX_SEGMENT_MS = 12000
+DEFAULT_VAD_THRESHOLD = 0.006
 
 APP_VERSION = "2.16.6"
 
@@ -853,6 +873,177 @@ def _drop_stuck_segments(segments, loose=False):
             continue
         out.append(s)
     return out
+
+
+def _has_openvino():
+    try:
+        import importlib.util
+        return (importlib.util.find_spec("openvino") is not None
+                or importlib.util.find_spec("openvino_genai") is not None)
+    except Exception:
+        return False
+
+
+def _has_qwen_asr_package():
+    try:
+        import importlib.util
+        return importlib.util.find_spec("qwen_asr") is not None
+    except Exception:
+        return False
+
+
+def _has_vulkan_runtime():
+    if not IS_WINDOWS:
+        return False
+    try:
+        sys32 = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "System32")
+        return os.path.isfile(os.path.join(sys32, "vulkan-1.dll"))
+    except Exception:
+        return False
+
+
+def _local_accel_backends():
+    backends = []
+    if _is_apple_silicon():
+        backends.append("metal")
+    if _fw_local_cuda_ok():
+        backends.append("cuda")
+    if _has_vulkan_runtime():
+        backends.append("vulkan")
+    if _has_openvino():
+        backends.append("openvino")
+    if not backends:
+        backends.append("cpu")
+    return backends
+
+
+_QWEN_MODEL_CACHE = {}
+
+
+def _qwen_language_name(lang):
+    return {
+        "en": "English",
+        "zh": "Chinese",
+        "ja": "Japanese",
+    }.get(lang, None)
+
+
+def _resolve_qwen_model_repo(model_hint=None):
+    hint = (model_hint or "").lower()
+    if "1.7" in hint or "1_7" in hint:
+        return "Qwen/Qwen3-ASR-1.7B"
+    return "Qwen/Qwen3-ASR-0.6B"
+
+
+def _load_qwen_asr_model(model_hint=None, with_timestamps=False):
+    repo = _resolve_qwen_model_repo(model_hint)
+    cache_key = (repo, bool(with_timestamps))
+    if cache_key in _QWEN_MODEL_CACHE:
+        return _QWEN_MODEL_CACHE[cache_key]
+
+    import torch
+    from qwen_asr import Qwen3ASRModel
+
+    if torch.cuda.is_available():
+        dtype = torch.bfloat16
+        device_map = "cuda:0"
+    else:
+        dtype = torch.float32
+        device_map = "cpu"
+
+    kwargs = {
+        "dtype": dtype,
+        "device_map": device_map,
+        "max_new_tokens": 4096,
+    }
+    if with_timestamps:
+        kwargs["forced_aligner"] = "Qwen/Qwen3-ForcedAligner-0.6B"
+        kwargs["forced_aligner_kwargs"] = {
+            "dtype": dtype,
+            "device_map": device_map,
+        }
+    model = _call_with_ssl_retry(Qwen3ASRModel.from_pretrained, repo, **kwargs)
+    _QWEN_MODEL_CACHE[cache_key] = model
+    return model
+
+
+def _qwen_result_segments(result, audio_duration=0.0):
+    segments = []
+    text = (getattr(result, "text", None) or "").strip()
+    ts_items = getattr(result, "time_stamps", None) or getattr(result, "timestamps", None) or []
+    for item in ts_items:
+        try:
+            seg_text = (getattr(item, "text", None) or "").strip()
+            seg_start = float(getattr(item, "start_time", None))
+            seg_end = float(getattr(item, "end_time", None))
+        except (TypeError, ValueError):
+            continue
+        if seg_text:
+            segments.append({"start": seg_start, "end": seg_end, "text": seg_text})
+    if segments:
+        return segments
+    if text:
+        return [{"start": 0.0, "end": float(audio_duration or 0.0), "text": text}]
+    return []
+
+
+class PauseSegmenter:
+    """根據音量門檻與停頓長度切出待辨識段落。"""
+
+    def __init__(self, samplerate, pause_ms=DEFAULT_PAUSE_MS,
+                 min_speech_ms=DEFAULT_MIN_SPEECH_MS,
+                 max_segment_ms=DEFAULT_MAX_SEGMENT_MS,
+                 vad_threshold=DEFAULT_VAD_THRESHOLD):
+        self.samplerate = max(int(samplerate or 16000), 1)
+        self.pause_samples = max(int(self.samplerate * pause_ms / 1000), 1)
+        self.min_speech_samples = max(int(self.samplerate * min_speech_ms / 1000), 1)
+        self.max_segment_samples = max(int(self.samplerate * max_segment_ms / 1000), self.min_speech_samples)
+        self.vad_threshold = max(float(vad_threshold), 1e-6)
+        self._ready = deque()
+        self.reset()
+
+    def add_audio(self, audio):
+        if audio is None or len(audio) == 0:
+            return
+        rms = float(np.sqrt(np.mean(audio ** 2))) if len(audio) else 0.0
+        voiced = rms >= self.vad_threshold
+        if voiced:
+            if not self._active:
+                self._active = True
+            self._chunks.append(np.array(audio, dtype=np.float32, copy=True))
+            self._speech_samples += len(audio)
+            self._segment_samples += len(audio)
+            self._silence_samples = 0
+        elif self._active:
+            self._chunks.append(np.array(audio, dtype=np.float32, copy=True))
+            self._segment_samples += len(audio)
+            self._silence_samples += len(audio)
+
+        if not self._active:
+            return
+        if self._speech_samples < self.min_speech_samples:
+            if self._segment_samples >= self.max_segment_samples:
+                self.reset()
+            return
+        if self._silence_samples >= self.pause_samples or self._segment_samples >= self.max_segment_samples:
+            self.flush()
+
+    def flush(self):
+        if self._active and self._chunks and self._speech_samples >= self.min_speech_samples:
+            self._ready.append(np.concatenate(self._chunks))
+        self.reset()
+
+    def pop_ready(self):
+        if self._ready:
+            return self._ready.popleft()
+        return None
+
+    def reset(self):
+        self._chunks = []
+        self._speech_samples = 0
+        self._silence_samples = 0
+        self._segment_samples = 0
+        self._active = False
 
 
 def _analyze_audio_loudness(wav_path, sample_seconds=120):
@@ -1514,6 +1705,8 @@ def check_dependencies(asr_engine="whisper", translate_engine=None):
         errors.append(f"找不到 whisper-stream: {WHISPER_STREAM}")
     if asr_engine == "moonshine" and not _MOONSHINE_AVAILABLE:
         errors.append("moonshine-voice 未安裝，請執行: pip install moonshine-voice sounddevice numpy")
+    if asr_engine == "qwen" and not _has_qwen_asr_package():
+        errors.append("QwenASR 目前需要官方 qwen-asr Python 套件，請先安裝: pip install qwen-asr")
     if translate_engine == "argos" and not os.path.isdir(ARGOS_PKG_PATH):
         errors.append(f"找不到翻譯模型: {ARGOS_PKG_PATH}")
     if translate_engine == "nllb" and not os.path.isdir(NLLB_MODEL_DIR):
@@ -1845,16 +2038,23 @@ def list_audio_devices(model_path):
 
 
 def select_asr_engine():
-    """讓使用者選擇語音辨識引擎（Moonshine / Whisper）"""
+    """讓使用者選擇語音辨識引擎（Whisper / Moonshine / QwenASR）"""
     if not _MOONSHINE_AVAILABLE:
-        print(f"  {C_DIM}(Moonshine 未安裝，使用 Whisper){RESET}")
-        return "whisper"
+        print(f"  {C_DIM}(Moonshine 未安裝，仍可使用 Whisper / QwenASR){RESET}")
+    if not _has_qwen_asr_package():
+        print(f"  {C_DIM}(QwenASR 未安裝，需先安裝 qwen-asr 套件){RESET}")
 
-    default_idx = 0  # Moonshine
+    default_idx = 0
 
     print(f"\n\n{C_TITLE}{BOLD}▎ 語音辨識引擎{RESET}")
     print(f"{C_DIM}{'─' * 60}{RESET}")
     for i, (key, name, desc) in enumerate(ASR_ENGINES):
+        if key == "moonshine" and not _MOONSHINE_AVAILABLE:
+            print(f"  {C_DIM}[{i}]{RESET} {C_DIM}{name:12s}{RESET} {C_DIM}未安裝{RESET}")
+            continue
+        if key == "qwen" and not _has_qwen_asr_package():
+            print(f"  {C_DIM}[{i}]{RESET} {C_DIM}{name:12s}{RESET} {C_DIM}未安裝 qwen-asr{RESET}")
+            continue
         if i == default_idx:
             print(f"  {C_HIGHLIGHT}{BOLD}[{i}] {name:12s}{RESET} {C_WHITE}{desc}{RESET}  {C_HIGHLIGHT}{REVERSE} 預設 {RESET}")
         else:
@@ -1882,6 +2082,10 @@ def select_asr_engine():
         idx = default_idx
 
     key, name, desc = ASR_ENGINES[idx]
+    if key == "moonshine" and not _MOONSHINE_AVAILABLE:
+        key, name, desc = ASR_ENGINES[0]
+    if key == "qwen" and not _has_qwen_asr_package():
+        key, name, desc = ASR_ENGINES[0]
     print(f"  {C_OK}→ {name}{RESET} {C_DIM}({desc}){RESET}\n")
     return key
 
@@ -5125,7 +5329,12 @@ def run_stream_remote(capture_id: int, translator, model_name: str,
                       record: bool = False, rec_device: int = None,
                       force_restart: bool = False,
                       meeting_topic: str = None,
-                      denoise: bool = False):
+                      denoise: bool = False,
+                      chunk_mode: str = DEFAULT_CHUNK_MODE,
+                      pause_ms: int = DEFAULT_PAUSE_MS,
+                      min_speech_ms: int = DEFAULT_MIN_SPEECH_MS,
+                      max_segment_ms: int = DEFAULT_MAX_SEGMENT_MS,
+                      vad_threshold: float = DEFAULT_VAD_THRESHOLD):
     """使用GPU 伺服器 Whisper 即時辨識：本機 sounddevice 擷取音訊 →
     環形緩衝 → 定期上傳 WAV 到伺服器 → 取回結果 → 翻譯顯示"""
     import numpy as np
@@ -5279,6 +5488,10 @@ def run_stream_remote(capture_id: int, translator, model_name: str,
         elif isinstance(translator, ArgosTranslator):
             print(f"  {C_OK}翻譯引擎: Argos 本機離線{RESET}")
     print(f"  {C_WHITE}音訊緩衝: {length_ms}ms / 步進 {step_ms}ms{RESET}")
+    if chunk_mode == "pause_vad":
+        print(f"  {C_WHITE}分段方式: 停頓自動辨識（{pause_ms}ms / 門檻 {vad_threshold:.4f}）{RESET}")
+    else:
+        print(f"  {C_WHITE}分段方式: 固定週期{RESET}")
     print(f"  {C_DIM}翻譯記錄: logs/{log_filename}{RESET}")
     if recorder:
         print(f"  {C_DIM}錄音: {recorder.path}{RESET}")
@@ -5296,6 +5509,10 @@ def run_stream_remote(capture_id: int, translator, model_name: str,
     ring_write_pos = 0
     ring_filled = 0  # 已寫入的總 sample 數
     ring_lock = threading.Lock()
+    segmenter = PauseSegmenter(target_sr, pause_ms=pause_ms,
+                               min_speech_ms=min_speech_ms,
+                               max_segment_ms=max_segment_ms,
+                               vad_threshold=vad_threshold) if chunk_mode == "pause_vad" else None
 
     pause_event = threading.Event()
     global _webui_pause_event; _webui_pause_event = pause_event
@@ -5325,9 +5542,13 @@ def run_stream_remote(capture_id: int, translator, model_name: str,
         # 同裝置錄音
         if recorder and rec_stream is None:
             recorder.write(audio)
+        if pause_event.is_set():
+            return
         # 降頻到 16kHz（簡單 decimation）
         step = max(1, int(round(resample_ratio)))
         downsampled = audio[::step]
+        if segmenter is not None:
+            segmenter.add_audio(downsampled)
         # 寫入環形緩衝
         n = len(downsampled)
         with ring_lock:
@@ -5379,6 +5600,16 @@ def run_stream_remote(capture_id: int, translator, model_name: str,
         ordered = _denoise(ordered, target_sr)
         # float32 → int16 PCM
         pcm = (ordered * 32767).clip(-32768, 32767).astype(np.int16)
+        wav_io = io.BytesIO()
+        with wave.open(wav_io, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(target_sr)
+            wf.writeframes(pcm.tobytes())
+        return wav_io.getvalue()
+
+    def wav_bytes_from_audio(audio):
+        pcm = (audio * 32767).clip(-32768, 32767).astype(np.int16)
         wav_io = io.BytesIO()
         with wave.open(wav_io, "wb") as wf:
             wf.setnchannels(1)
@@ -5631,7 +5862,29 @@ def run_stream_remote(capture_id: int, translator, model_name: str,
             now = time.monotonic()
             if pause_event.is_set():
                 # 暫停中：音訊持續擷取但不上傳
+                if segmenter is not None:
+                    segmenter.reset()
                 next_upload_time = now + step_sec
+                continue
+
+            if segmenter is not None:
+                seg_audio = segmenter.pop_ready()
+                if seg_audio is None:
+                    drain_ordered_results()
+                    continue
+                rms = float(np.sqrt(np.mean(seg_audio ** 2)))
+                if rms < 0.001:
+                    drain_ordered_results()
+                    continue
+                wav_bytes = wav_bytes_from_audio(seg_audio)
+                seq = upload_seq[0]
+                upload_seq[0] += 1
+                threading.Thread(
+                    target=upload_chunk,
+                    args=(seq, wav_bytes),
+                    daemon=True,
+                ).start()
+                drain_ordered_results()
                 continue
 
             if now < next_upload_time:
@@ -5683,7 +5936,12 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
                              length_ms: int = 5000, step_ms: int = 3000,
                              record: bool = False, rec_device: int = None,
                              meeting_topic: str = None,
-                             denoise: bool = False):
+                             denoise: bool = False,
+                             chunk_mode: str = DEFAULT_CHUNK_MODE,
+                             pause_ms: int = DEFAULT_PAUSE_MS,
+                             min_speech_ms: int = DEFAULT_MIN_SPEECH_MS,
+                             max_segment_ms: int = DEFAULT_MAX_SEGMENT_MS,
+                             vad_threshold: float = DEFAULT_VAD_THRESHOLD):
     """Windows 專用：sounddevice/WASAPI 擷取音訊 → 本機 faster-whisper 即時辨識。
     架構類似 run_stream_remote()，但用本機 faster-whisper 取代遠端 HTTP 上傳。"""
     import numpy as np
@@ -5849,6 +6107,10 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
         elif isinstance(translator, ArgosTranslator):
             print(f"  {C_OK}翻譯引擎: Argos 本機離線{RESET}")
     print(f"  {C_WHITE}音訊緩衝: {length_ms}ms / 步進 {step_ms}ms{RESET}")
+    if chunk_mode == "pause_vad":
+        print(f"  {C_WHITE}分段方式: 停頓自動辨識（{pause_ms}ms / 門檻 {vad_threshold:.4f}）{RESET}")
+    else:
+        print(f"  {C_WHITE}分段方式: 固定週期{RESET}")
     print(f"  {C_DIM}翻譯記錄: logs/{log_filename}{RESET}")
     if recorder:
         print(f"  {C_DIM}錄音: {recorder.path}{RESET}")
@@ -5866,6 +6128,10 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
     ring_write_pos = 0
     ring_filled = 0
     ring_lock = threading.Lock()
+    segmenter = PauseSegmenter(sd_samplerate, pause_ms=pause_ms,
+                               min_speech_ms=min_speech_ms,
+                               max_segment_ms=max_segment_ms,
+                               vad_threshold=vad_threshold) if chunk_mode == "pause_vad" else None
 
     pause_event = threading.Event()
     global _webui_pause_event; _webui_pause_event = pause_event
@@ -5892,6 +6158,10 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
         _push_rms(float(np.sqrt(np.mean(audio ** 2))))
         if recorder and rec_stream is None:
             recorder.write(audio)
+        if pause_event.is_set():
+            return
+        if segmenter is not None:
+            segmenter.add_audio(audio)
         n = len(audio)
         with ring_lock:
             if ring_write_pos + n <= ring_size:
@@ -5950,6 +6220,18 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
             wf.setnchannels(1)
             wf.setsampwidth(2)
             wf.setframerate(sd_samplerate)  # 原始取樣率（如 48000）
+            wf.writeframes(pcm.tobytes())
+        return tmp_path, rms
+
+    def write_audio_to_wav(audio):
+        ordered = _denoise(audio, sd_samplerate)
+        rms = float(np.sqrt(np.mean(ordered ** 2)))
+        pcm = (ordered * 32767).clip(-32768, 32767).astype(np.int16)
+        tmp_path = os.path.join(_tmp_wav_dir, f"jt_fw_{os.getpid()}_{time.time_ns()}.wav")
+        with wave.open(tmp_path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sd_samplerate)
             wf.writeframes(pcm.tobytes())
         return tmp_path, rms
 
@@ -6233,7 +6515,40 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
                     refresh_status_bar()
             now = time.monotonic()
             if pause_event.is_set():
+                if segmenter is not None:
+                    segmenter.reset()
                 next_transcribe_time = now + step_sec
+                continue
+            if segmenter is not None:
+                seg_audio = segmenter.pop_ready()
+                if seg_audio is None:
+                    drain_ordered_results()
+                    continue
+                wav_path, rms = write_audio_to_wav(seg_audio)
+                if rms < 0.001:
+                    try:
+                        os.unlink(wav_path)
+                    except Exception:
+                        pass
+                    drain_ordered_results()
+                    continue
+                with _active_lock:
+                    active = _active_transcriptions[0]
+                if active >= _MAX_CONCURRENT_TRANSCRIPTIONS:
+                    try:
+                        os.unlink(wav_path)
+                    except Exception:
+                        pass
+                    drain_ordered_results()
+                    continue
+                seq = transcribe_seq[0]
+                transcribe_seq[0] += 1
+                threading.Thread(
+                    target=transcribe_chunk,
+                    args=(seq, wav_path),
+                    daemon=True,
+                ).start()
+                drain_ordered_results()
                 continue
             if now < next_transcribe_time:
                 drain_ordered_results()
@@ -9784,11 +10099,12 @@ def _segments_to_vtt(segments_data, vtt_path):
 
 
 def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo",
+                       asr_engine="faster-whisper",
                        diarize=False, num_speakers=None, remote_whisper_cfg=None,
                        correct_with_llm=False, llm_model=None, llm_host=None,
                        llm_port=None, llm_server_type=None, meeting_topic=None,
                        gen_srt=True, gen_vtt=True):
-    """處理音訊檔：ffmpeg 轉檔 → faster-whisper 辨識 → 翻譯 → 存檔，回傳 (log_path, html_path, session_dir)"""
+    """處理音訊檔：ffmpeg 轉檔 → ASR 辨識 → 翻譯 → 存檔，回傳 (log_path, html_path, session_dir)"""
     from datetime import datetime
     import shutil
 
@@ -9875,7 +10191,32 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
     used_remote = False
     raw_segments = None  # 伺服器回傳的 segments list
 
-    if remote_whisper_cfg is not None:
+    if asr_engine == "qwen":
+        remote_whisper_cfg = None
+        print(f"  {C_WHITE}辨識位置    本機（QwenASR）{RESET}")
+        print(f"  {C_WHITE}載入模型    {_resolve_qwen_model_repo(model_size)}...{RESET}", end=" ", flush=True)
+        qwen_model = _load_qwen_asr_model(model_size, with_timestamps=True)
+        print(f"{C_OK}✓{RESET}")
+        print(f"  {C_WHITE}辨識中...{RESET}\n")
+        _webui_send({"type": "progress", "stage": "辨識中", "detail": f"本機 QwenASR"})
+
+        sbar = _SummaryStatusBar(model=_resolve_qwen_model_repo(model_size), task="辨識中", asr_location="本機").start()
+        if audio_duration > 0:
+            sbar.set_progress("0%")
+        qwen_lang = _qwen_language_name(lang)
+        qwen_t0 = time.monotonic()
+        results = _call_with_ssl_retry(
+            qwen_model.transcribe,
+            audio=asr_wav_path,
+            language=qwen_lang,
+            return_time_stamps=True,
+        )
+        result = results[0] if isinstance(results, (list, tuple)) else results
+        raw_segments = _qwen_result_segments(result, audio_duration=audio_duration)
+        t_asr_elapsed = time.monotonic() - qwen_t0
+        sbar.set_progress("100%")
+        sbar.set_task(f"QwenASR 辨識完成（{len(raw_segments)} 段，{t_asr_elapsed:.1f}s）", reset_timer=False)
+    elif remote_whisper_cfg is not None:
         rw_host = remote_whisper_cfg.get("host", "?")
         rw_port = remote_whisper_cfg.get("whisper_port", REMOTE_WHISPER_DEFAULT_PORT)
         print(f"  {C_WHITE}辨識位置    GPU 伺服器（{rw_host}:{rw_port}）{RESET}")
@@ -9919,7 +10260,7 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
             print(f"  {C_HIGHLIGHT}[降級] 改用本機 辨識{RESET}")
             remote_whisper_cfg = None  # fallback
 
-    if not used_remote:
+    if raw_segments is None and not used_remote:
         # 本機 faster-whisper
         try:
             from faster_whisper import WhisperModel
@@ -10165,9 +10506,10 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
         # 產生互動式 HTML 時間逐字稿
         transcript_html_path = os.path.splitext(log_path)[0] + ".html"
         _meta = {
-            "asr_engine": "faster-whisper",
-            "asr_model": model_size,
-            "asr_location": "GPU 伺服器" if used_remote else "本機",
+            "asr_engine": "qwen-asr" if asr_engine == "qwen" else "faster-whisper",
+            "asr_model": _resolve_qwen_model_repo(model_size) if asr_engine == "qwen" else model_size,
+            "asr_location": ("本機（QwenASR）" if asr_engine == "qwen"
+                              else ("GPU 伺服器" if used_remote else "本機")),
             "input_file": os.path.basename(input_path),
             "meeting_topic": meeting_topic,
         }
@@ -12435,8 +12777,8 @@ def parse_args():
         "--mode", choices=mode_names, metavar="MODE",
         help=f"功能模式 ({' / '.join(mode_names)}，預設 en2zh 英翻中)")
     parser.add_argument(
-        "--asr", choices=["whisper", "moonshine", "faster-whisper"], metavar="ASR",
-        help="語音辨識引擎 (whisper / moonshine / faster-whisper，預設 whisper)")
+        "--asr", choices=["whisper", "moonshine", "faster-whisper", "qwen"], metavar="ASR",
+        help="語音辨識引擎 (whisper / moonshine / faster-whisper / qwen，預設 whisper)")
     parser.add_argument(
         "-m", "--model", choices=model_names, metavar="MODEL",
         help=f"Whisper 模型 ({' / '.join(model_names)}，--input 預設 large-v3-turbo，中日文品質最好用 -m large-v3)")
@@ -12446,6 +12788,24 @@ def parse_args():
     parser.add_argument(
         "-s", "--scene", choices=scene_names, metavar="SCENE",
         help=f"使用場景 ({' / '.join(scene_names)})")
+    parser.add_argument(
+        "--chunk-mode", choices=[k for k, _ in CHUNK_MODES], default=DEFAULT_CHUNK_MODE,
+        help="即時辨識分段模式 (pause_vad / fixed，預設 pause_vad)")
+    parser.add_argument(
+        "--qwen-backend", choices=[k for k, _ in QWEN_BACKENDS], default=DEFAULT_QWEN_BACKEND,
+        help="QwenASR 後端 (auto / openvino / vulkan，預設 auto)")
+    parser.add_argument(
+        "--pause-ms", type=int, default=DEFAULT_PAUSE_MS, metavar="MS",
+        help=f"停頓觸發辨識的靜音長度（毫秒，預設 {DEFAULT_PAUSE_MS}）")
+    parser.add_argument(
+        "--min-speech-ms", type=int, default=DEFAULT_MIN_SPEECH_MS, metavar="MS",
+        help=f"最短語音段長度（毫秒，預設 {DEFAULT_MIN_SPEECH_MS}）")
+    parser.add_argument(
+        "--max-segment-ms", type=int, default=DEFAULT_MAX_SEGMENT_MS, metavar="MS",
+        help=f"最長單段語音長度（毫秒，預設 {DEFAULT_MAX_SEGMENT_MS}）")
+    parser.add_argument(
+        "--vad-threshold", type=float, default=DEFAULT_VAD_THRESHOLD, metavar="FLOAT",
+        help=f"停頓辨識 RMS 門檻（預設 {DEFAULT_VAD_THRESHOLD}）")
     parser.add_argument(
         "--topic", metavar="TOPIC",
         help="會議主題（提升翻譯品質，例：--topic 'ZFS 儲存管理'）")
@@ -12593,6 +12953,30 @@ def _build_cli_command(**kwargs):
     asr = kwargs.get("asr")
     if asr:
         parts.append(f"--asr {asr}")
+
+    chunk_mode = kwargs.get("chunk_mode")
+    if chunk_mode:
+        parts.append(f"--chunk-mode {chunk_mode}")
+
+    qwen_backend = kwargs.get("qwen_backend")
+    if qwen_backend:
+        parts.append(f"--qwen-backend {qwen_backend}")
+
+    pause_ms = kwargs.get("pause_ms")
+    if pause_ms:
+        parts.append(f"--pause-ms {pause_ms}")
+
+    min_speech_ms = kwargs.get("min_speech_ms")
+    if min_speech_ms:
+        parts.append(f"--min-speech-ms {min_speech_ms}")
+
+    max_segment_ms = kwargs.get("max_segment_ms")
+    if max_segment_ms:
+        parts.append(f"--max-segment-ms {max_segment_ms}")
+
+    vad_threshold = kwargs.get("vad_threshold")
+    if vad_threshold:
+        parts.append(f"--vad-threshold {vad_threshold}")
 
     moonshine_model = kwargs.get("moonshine_model")
     if moonshine_model:
@@ -12872,9 +13256,12 @@ def main():
             else:
                 engine = "llm"
             summary_model = args.summary_model
+            if args.asr == "qwen" and args.qwen_backend != "auto":
+                print(f"  {C_WARN}[提示] 目前離線 QwenASR 先走官方 qwen-asr Python 後端，{args.qwen_backend} 設定暫未實作，將忽略。{RESET}")
             # GPU 伺服器：有設定且未指定 --local-asr
             use_remote_whisper = (REMOTE_WHISPER_CONFIG is not None
-                                 and not args.local_asr)
+                                 and not args.local_asr
+                                 and args.asr != "qwen")
             meeting_topic = getattr(args, 'topic', None)
 
         # --diarize 檢查 resemblyzer / spectralcluster
@@ -12992,8 +13379,11 @@ def main():
         print(f"\n\n{C_TITLE}{BOLD}▎ 設定總覽{RESET}")
         print(f"{C_DIM}{'─' * 60}{RESET}")
         print(f"  {C_WHITE}模式        {mode_label}{RESET}")
-        print(f"  {C_WHITE}辨識模型    {fw_model}{RESET}")
-        if remote_whisper_cfg:
+        _asr_disp = "Qwen/Qwen3-ASR-0.6B" if args.asr == "qwen" else fw_model
+        print(f"  {C_WHITE}辨識模型    {_asr_disp}{RESET}")
+        if args.asr == "qwen":
+            print(f"  {C_WHITE}辨識位置    本機（QwenASR 官方 Python 後端）{RESET}")
+        elif remote_whisper_cfg:
             rw_h = remote_whisper_cfg.get("host", "?")
             print(f"  {C_WHITE}辨識位置    GPU 伺服器（{rw_h}）{RESET}")
         else:
@@ -13024,6 +13414,7 @@ def main():
 
         # CLI 指令回顯 + 確認（在設定總覽區塊內）
         _cli_kw = dict(input_files=args.input, mode=mode, model=fw_model,
+                       asr=args.asr,
                        diarize=diarize, num_speakers=num_speakers,
                        summarize=(summary_mode in ("both", "summary")),
                        summary_model=summary_model if summary_mode in ("both", "summary") else None,
@@ -13113,6 +13504,7 @@ def main():
                 _gen_vtt = not getattr(args, 'no_vtt', False)
                 for fpath in args.input:
                     log_path, t_html, session_dir = process_audio_file(fpath, mode, translator, model_size=fw_model,
+                                                           asr_engine=("qwen" if args.asr == "qwen" else "faster-whisper"),
                                                            diarize=diarize, num_speakers=num_speakers,
                                                            remote_whisper_cfg=remote_whisper_cfg,
                                                            correct_with_llm=_do_llm_correct,
@@ -13599,8 +13991,8 @@ def main():
             asr_engine = select_asr_engine()
         else:
             asr_engine = "whisper"
-        # 中文/日文模式強制 whisper（Moonshine 僅支援英文）
-        if mode not in ("en2zh", "en"):
+        # 中文/日文模式只禁用 Moonshine（QwenASR / Whisper 可保留）
+        if mode not in ("en2zh", "en") and asr_engine == "moonshine":
             asr_engine = "whisper"
         # --mic 不支援 moonshine（互動選單選到 moonshine 的情況）
         if args.mic and asr_engine == "moonshine":
@@ -13609,7 +14001,7 @@ def main():
 
         # GPU 伺服器 Whisper 即時模式（非 Moonshine、非 --local-asr）
         use_remote_cli = (REMOTE_WHISPER_CONFIG and not args.local_asr
-                          and asr_engine != "moonshine")
+                          and asr_engine not in ("moonshine", "qwen"))
         # --mic + GPU 伺服器：麥克風也送遠端辨識（不再限制）
         if use_remote_cli:
             # 伺服器模式：不需本機 whisper-stream
@@ -13670,6 +14062,9 @@ def main():
                            engine=engine if mode in _TRANSLATE_MODES else None,
                            llm_host=f"{host}:{port}" if mode in _TRANSLATE_MODES and engine == "llm" else None,
                            record=args.record, rec_device=args.rec_device,
+                           chunk_mode=args.chunk_mode, pause_ms=args.pause_ms,
+                           min_speech_ms=args.min_speech_ms, max_segment_ms=args.max_segment_ms,
+                           vad_threshold=args.vad_threshold,
                            denoise=args.denoise)
             if not _confirm_start(_build_cli_command(**_cli_kw)):
                 sys.exit(0)
@@ -13699,14 +14094,24 @@ def main():
                                       record=args.record, rec_device=args.rec_device,
                                       force_restart=args.restart_server,
                                       meeting_topic=meeting_topic,
-                                      denoise=args.denoise)
+                                      denoise=args.denoise,
+                                      chunk_mode=args.chunk_mode,
+                                      pause_ms=args.pause_ms,
+                                      min_speech_ms=args.min_speech_ms,
+                                      max_segment_ms=args.max_segment_ms,
+                                      vad_threshold=args.vad_threshold)
             else:
                 run_stream_remote(capture_id, translator, model_name, REMOTE_WHISPER_CONFIG,
                                   mode, length_ms, step_ms,
                                   record=args.record, rec_device=args.rec_device,
                                   force_restart=args.restart_server,
                                   meeting_topic=meeting_topic,
-                                  denoise=args.denoise)
+                                  denoise=args.denoise,
+                                  chunk_mode=args.chunk_mode,
+                                  pause_ms=args.pause_ms,
+                                  min_speech_ms=args.min_speech_ms,
+                                  max_segment_ms=args.max_segment_ms,
+                                  vad_threshold=args.vad_threshold)
         elif asr_engine == "moonshine":
             check_dependencies(asr_engine)
             # Moonshine 模式
@@ -13764,6 +14169,11 @@ def main():
             run_stream_moonshine(capture_id, translator, ms_model_name, mode,
                                  record=args.record, rec_device=args.rec_device,
                                  meeting_topic=meeting_topic)
+        elif asr_engine == "qwen":
+            check_dependencies(asr_engine)
+            print(f"{C_WARN}[提示] QwenASR 目前已先接入離線 --input 路徑；即時模式推論器仍未完成。{RESET}", file=sys.stderr)
+            print(f"{C_WARN}      即時模式請先使用 Whisper / faster-whisper。{RESET}", file=sys.stderr)
+            sys.exit(2)
         else:
             check_dependencies(asr_engine)
             # Whisper 本機模式（原有邏輯）
@@ -13848,6 +14258,9 @@ def main():
                            engine=engine if mode in _TRANSLATE_MODES else None,
                            llm_host=f"{host}:{port}" if mode in _TRANSLATE_MODES and engine == "llm" else None,
                            record=args.record, rec_device=args.rec_device,
+                           chunk_mode=args.chunk_mode, pause_ms=args.pause_ms,
+                           min_speech_ms=args.min_speech_ms, max_segment_ms=args.max_segment_ms,
+                           vad_threshold=args.vad_threshold,
                            mic=args.mic, denoise=args.denoise)
             if not _confirm_start(_build_cli_command(**_cli_kw)):
                 sys.exit(0)
@@ -14217,6 +14630,9 @@ def main():
                                    engine=engine if mode in _TRANSLATE_MODES else None,
                                    llm_model=model if _need_llm else None,
                                    llm_host=f"{host}:{port}" if _need_llm else None,
+                                   chunk_mode=args.chunk_mode, pause_ms=args.pause_ms,
+                                   min_speech_ms=args.min_speech_ms, max_segment_ms=args.max_segment_ms,
+                                   vad_threshold=args.vad_threshold,
                                    denoise=args.denoise)
                     if not _confirm_start(_build_cli_command(**_cli_kw)):
                         sys.exit(0)
@@ -14224,7 +14640,12 @@ def main():
                                             length_ms=length_ms, step_ms=step_ms,
                                             record=record, rec_device=rec_device,
                                             meeting_topic=meeting_topic,
-                                            denoise=args.denoise)
+                                            denoise=args.denoise,
+                                            chunk_mode=args.chunk_mode,
+                                            pause_ms=args.pause_ms,
+                                            min_speech_ms=args.min_speech_ms,
+                                            max_segment_ms=args.max_segment_ms,
+                                            vad_threshold=args.vad_threshold)
                 else:
                     capture_id = list_audio_devices(model_path)
                     _need_llm = mode in _TRANSLATE_MODES and engine == "llm"

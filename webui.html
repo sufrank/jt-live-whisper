@@ -245,10 +245,19 @@ kbd{display:inline-block;font-family:inherit;font-size:10px;padding:1px 5px;bord
     <div class="sec-hint" id="asrHint">選擇辨識模式與引擎。雙向模式建議使用耳麥避免影響。場景的緩衝長度越長句子越完整，越短反應越即時。</div>
     <div class="fg"><label>功能模式</label><div class="csel" id="iMode" data-value=""></div></div>
     <div class="fg" id="rAsrLoc"><label>辨識位置</label><div class="csel" id="iAsrLoc" data-value=""></div></div>
+    <div class="fg"><label>ASR 引擎</label><div class="csel" id="iAsr" data-value=""></div></div>
     <div id="rModelScene">
       <div class="fg"><label>辨識模型</label><div class="csel" id="iModel" data-value=""></div></div>
       <div class="fg" id="rScene"><label>場景</label><div class="csel" id="iScene" data-value=""></div></div>
     </div>
+    <div class="fg"><label>分段方式</label><div class="csel" id="iChunkMode" data-value=""></div></div>
+    <div class="fg" id="rQwenBackend" style="display:none"><label>Qwen 後端</label><div class="csel" id="iQwenBackend" data-value=""></div></div>
+    <div class="row3" id="rPauseTuning" style="margin-top:8px">
+      <div class="fg"><label>停頓 ms</label><input id="iPauseMs" type="number" min="100" max="5000" value="800"></div>
+      <div class="fg"><label>最短語音 ms</label><input id="iMinSpeechMs" type="number" min="50" max="5000" value="250"></div>
+      <div class="fg"><label>最長單段 ms</label><input id="iMaxSegmentMs" type="number" min="1000" max="60000" value="12000"></div>
+    </div>
+    <div class="fg" id="rVadThreshold" style="margin-top:8px"><label>VAD 門檻</label><input id="iVadThreshold" type="number" min="0.001" max="0.1" step="0.001" value="0.006"></div>
   </div>
   <!-- 語言翻譯 -->
   <div class="sec" id="rEngine">
@@ -453,7 +462,7 @@ kbd{display:inline-block;font-family:inherit;font-size:10px;padding:1px 5px;bord
 <script>
 const $=id=>document.getElementById(id),msgsEl=$('msgs'),dot=$('dot'),newBtn=$('newBtn');
 let cnt=0,aScr=true,ws=null,rTimer=null,startTime=null,timerIv=null,_discShown=false;
-let curCfg={mode:'',modeLabel:'',model:'',engine:'',asrLoc:'',record:false,denoise:false,mic:false};
+let curCfg={mode:'',modeLabel:'',model:'',engine:'',asr:'whisper',asrLoc:'',record:false,denoise:false,mic:false};
 let _autoLb='',_autoMic='';
 let _lastStartBody=null,_allDevices=[],_isSwitching=false,_curDeviceId=null,_curMicDeviceId=null;
 let _asrItemsCache=null,_asrLastVal='';
@@ -527,7 +536,13 @@ async function loadCfg(){
   _cfgStep('載入辨識模型與翻譯引擎...');
   _recModels=c.recommended_models||{};_cfgModels=c.models;_lastModel=L.model;
   _updateModelRec(cselVal($('iMode')));
+  cselSetItems($('iAsr'),(c.asr_engines||[]).map(a=>({value:a.value,label:a.label,tag:a.value===(L.asr||'whisper')?'前次使用':''})));cselSetValue($('iAsr'),L.asr||'whisper');
+  if(c.local_backends&&c.local_backends.length){$('asrHint').textContent+=' 本機後端：'+c.local_backends.join(' / ')+'。'}
+  if(c.qwen_available===false){$('asrHint').textContent+=' QwenASR 需先安裝 qwen-asr 套件。'}
   cselSetItems($('iScene'),c.scenes.map(s=>({value:s.value,label:s.label,tag:tagFor(s.value,'training',L.scene)})));cselSetValue($('iScene'),L.scene||'training');
+  cselSetItems($('iChunkMode'),(c.chunk_modes||[]).map(m=>({value:m.value,label:m.label,tag:m.value===(L.chunk_mode||'pause_vad')?'前次使用':''})));cselSetValue($('iChunkMode'),L.chunk_mode||'pause_vad');
+  cselSetItems($('iQwenBackend'),(c.qwen_backends||[]).map(m=>({value:m.value,label:m.label,tag:m.value===(L.qwen_backend||'auto')?'前次使用':''})));cselSetValue($('iQwenBackend'),L.qwen_backend||'auto');
+  $('iPauseMs').value=L.pause_ms||800;$('iMinSpeechMs').value=L.min_speech_ms||250;$('iMaxSegmentMs').value=L.max_segment_ms||12000;$('iVadThreshold').value=L.vad_threshold||0.006;
   const defEng=c.default_engine||'llm';
   _allEngines=c.engines.map(e=>({value:e.value,label:e.label,tag:tagFor(e.value,defEng,L.engine)}));
   cselSetItems($('iEngine'),_allEngines);cselSetValue($('iEngine'),L.engine||defEng);
@@ -553,7 +568,7 @@ async function loadCfg(){
   if(L.gen_vtt===false)$('iGenVtt').checked=false;
   if(c.summary_descs)_sumDescs=c.summary_descs;
   _updateSumModels(c.llm_models.map(m=>m.value));cselSetValue($('iSumModel'),L.summary_model||'');
-  engChg();$('iMode').addEventListener('change',()=>{engChg();_updateModelRec(cselVal($('iMode')))});$('iEngine').addEventListener('change',engChg);$('iAsrLoc').addEventListener('change',()=>{const v=cselVal($('iAsrLoc'));if(v&&!['en_zh','ja_zh'].includes(cselVal($('iMode'))))_asrLastVal=v;engChg()});
+  engChg();$('iMode').addEventListener('change',()=>{engChg();_updateModelRec(cselVal($('iMode')))});$('iEngine').addEventListener('change',engChg);$('iAsr').addEventListener('change',engChg);$('iChunkMode').addEventListener('change',engChg);$('iAsrLoc').addEventListener('change',()=>{const v=cselVal($('iAsrLoc'));if(v&&!['en_zh','ja_zh'].includes(cselVal($('iMode'))))_asrLastVal=v;engChg()});
   const st=await(await fetch('/api/status',{headers:_authHeaders()})).json();
   if(_authRole==='read'){
     // 唯讀模式：有在執行就直接進字幕頁，否則顯示等待畫面
@@ -610,6 +625,7 @@ let _llmQueried=false;
 let _allEngines=[];
 function engChg(){
   const m=cselVal($('iMode')),isT=['en','zh','ja','record'].includes(m),isRec=m==='record',isFile=cselVal($('iSource'))==='file';
+  const asr=cselVal($('iAsr'))||'whisper',chunkMode=cselVal($('iChunkMode'))||'pause_vad';
   $('rEngine').style.display=isT?'none':'';
   // 純錄音：只需模式 + 裝置
   $('rModelScene').style.display=isRec?'none':'';
@@ -617,6 +633,9 @@ function engChg(){
   const isBidi=['en_zh','ja_zh'].includes(m);
   if(isRec){$('rAsrLoc').style.display='none';$('rOffline').style.display='none'}
   else{$('rOffline').style.display=isFile?'':'none'}
+  $('rQwenBackend').style.display=asr==='qwen'?'':'none';
+  $('rPauseTuning').style.display=(chunkMode==='pause_vad'&&!isRec)?'grid':'none';
+  $('rVadThreshold').style.display=(chunkMode==='pause_vad'&&!isRec)?'':'none';
   // 雙向模式：強制本機，GPU 不支援
   if(isBidi&&!isFile){
     const asrItems=[{value:'gpu',label:'GPU 伺服器（雙向模式不支援）',tag:'不支援此模式',disabled:true},{value:'local',label:'本機',tag:''}];
@@ -649,6 +668,8 @@ function engChg(){
     if(isGpu){micNote.style.display='block';micNote.style.background='rgba(13,110,253,.06)';micNote.style.color='var(--accent)';micNote.style.borderColor='rgba(13,110,253,.2)';micNote.innerHTML='麥克風辨識也會送到 GPU 伺服器處理。'}
     else{micNote.style.display='none'}
   }else{micNote.style.display='none'}
+  if(isBidi&&asr==='qwen'){showToast('雙向模式第一版不支援 QwenASR，已切回 Whisper','err');cselSetValue($('iAsr'),'whisper')}
+  if((m==='zh'||m==='ja'||m==='zh2en'||m==='ja2zh'||m==='zh2ja')&&asr==='moonshine'){showToast('Moonshine 僅支援英文，已切回 Whisper','err');cselSetValue($('iAsr'),'whisper')}
 }
 let _sumDescs={};
 function _sumLabel(m){const d=_sumDescs[m];return d?m+' — '+d:m}
@@ -659,17 +680,19 @@ async function testLlm(){const h=$('iLlmHost').value.trim();$('testResult').inne
 async function go(){
   const mode=cselVal($('iMode')),isFile=cselVal($('iSource'))==='file';
   const asrLoc=cselVal($('iAsrLoc'))==='local'?'本機':'GPU 伺服器';
+  const asr=cselVal($('iAsr'))||'whisper';
   const eng=cselVal($('iEngine')),needLlm=eng==='llm'&&!['en','zh','ja','record'].includes(mode);
   // 防呆檢查
+  if(!isFile&&asr==='qwen'){showToast('QwenASR 即時模式尚未完成，請先用於離線處理或改用 Whisper','err');return}
   if(isFile&&!_selectedFiles.length){showToast('請先選擇至少一個音訊檔案','err');return}
   if(needLlm&&!$('iLlmHost').value.trim()){showToast('使用 LLM 翻譯引擎需填寫 LLM 主機地址','err');return}
   if(needLlm&&!cselVal($('iLlmModel'))){showToast('請先測試連線並選擇 LLM 模型','err');return}
   if(isFile&&$('iSummarize').checked&&!$('iLlmHost').value.trim()){showToast('產生摘要需要 LLM 伺服器，請填寫 LLM 主機地址','err');return}
   // 檢查是否已在執行
   try{const st=await(await fetch('/api/status',{headers:_authHeaders()})).json();if(st.running){showToast('已有處理正在執行中，請先停止再重新啟動','err');return}}catch(e){}
-  curCfg={mode,modeLabel:_modeLabels[mode]||mode,model:cselVal($('iModel')),engine:eng,asrLoc,isFile,record:$('iRec').checked,denoise:$('iDenoise').checked,mic:$('iMic').checked,diarize:isFile&&$('iDiarize').checked,summarize:isFile&&$('iSummarize').checked,subtitle_overlay:$('iOvEnable')&&$('iOvEnable').checked};
+  curCfg={mode,modeLabel:_modeLabels[mode]||mode,model:cselVal($('iModel')),engine:eng,asr:cselVal($('iAsr')),asrLoc,isFile,record:$('iRec').checked,denoise:$('iDenoise').checked,mic:$('iMic').checked,diarize:isFile&&$('iDiarize').checked,summarize:isFile&&$('iSummarize').checked,subtitle_overlay:$('iOvEnable')&&$('iOvEnable').checked};
   $('goBtn').disabled=true;$('goBtn').textContent='啟動中...';
-  try{const b={mode,model:cselVal($('iModel')),scene:cselVal($('iScene')),engine:cselVal($('iEngine')),llm_model:cselVal($('iLlmModel')),llm_host:$('iLlmHost').value,topic:$('iTopic').value,record:$('iRec').checked,mic:$('iMic').checked,denoise:$('iDenoise').checked,local_asr:cselVal($('iAsrLoc'))==='local',device:cselVal($('iDevice'))||null,subtitle_overlay:$('iOvEnable')&&$('iOvEnable').checked,fwd_enabled:$('iFwdEnable')&&$('iFwdEnable').checked,kw_enabled:$('iKwEnable')&&$('iKwEnable').checked};
+  try{const b={mode,model:cselVal($('iModel')),scene:cselVal($('iScene')),asr:cselVal($('iAsr')),chunk_mode:cselVal($('iChunkMode')),qwen_backend:cselVal($('iQwenBackend')),pause_ms:parseInt($('iPauseMs').value)||800,min_speech_ms:parseInt($('iMinSpeechMs').value)||250,max_segment_ms:parseInt($('iMaxSegmentMs').value)||12000,vad_threshold:parseFloat($('iVadThreshold').value)||0.006,engine:cselVal($('iEngine')),llm_model:cselVal($('iLlmModel')),llm_host:$('iLlmHost').value,topic:$('iTopic').value,record:$('iRec').checked,mic:$('iMic').checked,denoise:$('iDenoise').checked,local_asr:cselVal($('iAsrLoc'))==='local',device:cselVal($('iDevice'))||null,subtitle_overlay:$('iOvEnable')&&$('iOvEnable').checked,fwd_enabled:$('iFwdEnable')&&$('iFwdEnable').checked,kw_enabled:$('iKwEnable')&&$('iKwEnable').checked};
   if(isFile&&_selectedFiles.length){b.input_files=_selectedFiles;if($('iDiarize').checked){b.diarize=true;const ns=parseInt($('iNumSpk').value)||0;if(ns>0)b.num_speakers=ns}if($('iSummarize').checked){b.summarize=true;const sm=cselVal($('iSumModel'));if(sm)b.summary_model=sm;const sr=parseInt($('iSumRounds').value)||1;if(sr>1)b.summary_rounds=sr}if(!$('iGenSrt').checked)b.no_srt=true;if(!$('iGenVtt').checked)b.no_vtt=true}
   const r=await fetch('/api/start',{method:'POST',headers:_authHeaders(),body:JSON.stringify(b)});const d=await r.json();
   if(d.status==='started'){_lastStartBody=JSON.parse(JSON.stringify(b));_curDeviceId=b.device;showLive();$('hMode').textContent=curCfg.modeLabel}}catch(e){showToast('啟動失敗: '+e.message,'err')}

@@ -51,11 +51,15 @@ try:
         WHISPER_MODELS as _TM_WHISPER_MODELS,
         SUMMARY_MODELS as _TM_SUMMARY_MODELS,
         _recommended_whisper_model as _tm_recommended_whisper_model,
+        _local_accel_backends as _tm_local_accel_backends,
+        _has_qwen_asr_package as _tm_has_qwen_asr_package,
     )
 except Exception:
     _TM_WHISPER_MODELS = None
     _TM_SUMMARY_MODELS = None
     _tm_recommended_whisper_model = None
+    _tm_local_accel_backends = None
+    _tm_has_qwen_asr_package = None
 
 # ─── 安全設定 ──────────────────────────────────────────────────
 _webui_passwords = {"read": "", "admin": ""}  # 從 config.json 載入
@@ -330,6 +334,20 @@ def _get_config():
         {"value": "presentation", "label": "演講簡報（12秒）"},
         {"value": "subtitle", "label": "快速字幕（3秒）"},
     ]
+    asr_engines = [
+        {"value": "whisper", "label": "Whisper — 高準確度，既有主路徑"},
+        {"value": "moonshine", "label": "Moonshine — 低延遲，僅英文"},
+        {"value": "qwen", "label": "QwenASR — 停頓觸發，規劃支援 OpenVINO / Vulkan"},
+    ]
+    chunk_modes = [
+        {"value": "pause_vad", "label": "停頓自動辨識（推薦）"},
+        {"value": "fixed", "label": "固定週期"},
+    ]
+    qwen_backends = [
+        {"value": "auto", "label": "自動"},
+        {"value": "openvino", "label": "OpenVINO"},
+        {"value": "vulkan", "label": "Vulkan"},
+    ]
     try:
         if _TM_WHISPER_MODELS is None:
             raise ImportError("translate_meeting not loaded")
@@ -436,11 +454,22 @@ def _get_config():
         pass
     if not summary_descs:
         summary_descs = {"gpt-oss:120b": "品質最好（推薦）", "gpt-oss:20b": "速度快，品質一般"}
+    local_backends = []
+    qwen_available = False
+    try:
+        if _tm_local_accel_backends is not None:
+            local_backends = _tm_local_accel_backends()
+        if _tm_has_qwen_asr_package is not None:
+            qwen_available = bool(_tm_has_qwen_asr_package())
+    except Exception:
+        pass
     return {
         "modes": modes, "scenes": scenes, "models": models, "engines": engines,
+        "asr_engines": asr_engines, "chunk_modes": chunk_modes, "qwen_backends": qwen_backends,
         "llm_models": llm_models, "llm_host": llm_host, "llm_model": llm_model,
         "devices": devices, "auto_loopback": auto_loopback, "auto_mic": auto_mic,
         "gpu_host": gpu_host, "summary_descs": summary_descs,
+        "local_backends": local_backends, "qwen_available": qwen_available,
         "recommended_models": recommended_models,
         "default_engine": "llm" if llm_host else "nllb",
         "last": last, "version": "2.16.6",
@@ -865,6 +894,19 @@ def _build_args(body: dict) -> list:
             args.extend(["--summary-rounds", str(int(sr))])
     if body.get("local_asr"):
         args.append("--local-asr")
+    asr = body.get("asr")
+    if asr:
+        args.extend(["--asr", asr])
+    chunk_mode = body.get("chunk_mode")
+    if chunk_mode:
+        args.extend(["--chunk-mode", chunk_mode])
+    qwen_backend = body.get("qwen_backend")
+    if qwen_backend:
+        args.extend(["--qwen-backend", qwen_backend])
+    for key in ("pause_ms", "min_speech_ms", "max_segment_ms", "vad_threshold"):
+        val = body.get(key)
+        if val not in (None, ""):
+            args.extend([f"--{key.replace('_', '-')}", str(val)])
     if body.get("no_srt"):
         args.append("--no-srt")
     if body.get("no_vtt"):
@@ -894,6 +936,13 @@ async def api_start(request: Request, body: dict = {}):
         cfg["webui_last"] = {
             "mode": body.get("mode"), "model": body.get("model"),
             "scene": body.get("scene"), "engine": body.get("engine"),
+            "asr": body.get("asr", "whisper"),
+            "chunk_mode": body.get("chunk_mode", "pause_vad"),
+            "qwen_backend": body.get("qwen_backend", "auto"),
+            "pause_ms": body.get("pause_ms", 800),
+            "min_speech_ms": body.get("min_speech_ms", 250),
+            "max_segment_ms": body.get("max_segment_ms", 12000),
+            "vad_threshold": body.get("vad_threshold", 0.006),
             "llm_model": body.get("llm_model"), "llm_host": body.get("llm_host"),
             "local_asr": body.get("local_asr", False),
             "record": body.get("record", False), "mic": body.get("mic", False),
