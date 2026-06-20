@@ -856,6 +856,7 @@ $corePackages = @(
     @("ctranslate2",                     "ctranslate2（語音辨識加速引擎）"),
     @("sentencepiece",                   "sentencepiece（分詞工具）"),
     @("faster-whisper",                  "faster-whisper（離線語音辨識）"),
+    @("qwen-asr",                        "qwen-asr（QwenASR 即時/離線辨識）"),
     @("scipy",                           "scipy（科學計算）"),
     @("librosa",                         "librosa（音訊分析）"),
     @("spectralcluster",                 "spectralcluster（講者辨識 - 分群）"),
@@ -2320,6 +2321,7 @@ $verifyModules = @(
     @("ctranslate2",       "ctranslate2（語音辨識加速）"),
     @("sentencepiece",     "sentencepiece（分詞工具）"),
     @("faster_whisper",    "faster-whisper（離線辨識）"),
+    @("qwen_asr",          "qwen-asr（QwenASR）"),
     @("resemblyzer",       "resemblyzer（講者辨識）"),
     @("spectralcluster",   "spectralcluster（講者分群）"),
     @("sounddevice",       "sounddevice（音訊擷取）"),
@@ -2423,6 +2425,8 @@ print('found' if found else '')
 
 $features = @(
     @{ OK = (venv_import_ok "faster_whisper"); Desc = "離線音訊處理 (--input)"; Engine = "faster-whisper" },
+    @{ OK = (venv_import_ok "qwen_asr");       Desc = "QwenASR 即時/離線辨識";    Engine = "官方 qwen-asr" },
+    @{ OK = ((Test-Path (Join-Path $SCRIPT_DIR "chatllm\main.exe")) -and (Test-Path (Join-Path $SCRIPT_DIR "GPUModel\qwen3-asr-1.7b.bin"))); Desc = "QwenASR Vulkan 後端"; Engine = "chatllm + qwen3-asr-1.7b.bin" },
     @{ OK = $fwModelOk;                        Desc = "Whisper 模型 large-v3-turbo"; Engine = "faster-whisper 格式" },
     @{ OK = (venv_import_ok "resemblyzer");    Desc = "AI 講者辨識 (--diarize)"; Engine = "resemblyzer" },
     @{ OK = (venv_import_ok "argostranslate"); Desc = "Argos 離線翻譯";          Engine = "僅英翻中" },

@@ -53,6 +53,8 @@ try:
         _recommended_whisper_model as _tm_recommended_whisper_model,
         _local_accel_backends as _tm_local_accel_backends,
         _has_qwen_asr_package as _tm_has_qwen_asr_package,
+        _has_qwen_vulkan_backend as _tm_has_qwen_vulkan_backend,
+        _qwen_vulkan_missing_reason as _tm_qwen_vulkan_missing_reason,
     )
 except Exception:
     _TM_WHISPER_MODELS = None
@@ -60,6 +62,8 @@ except Exception:
     _tm_recommended_whisper_model = None
     _tm_local_accel_backends = None
     _tm_has_qwen_asr_package = None
+    _tm_has_qwen_vulkan_backend = None
+    _tm_qwen_vulkan_missing_reason = None
 
 # ─── 安全設定 ──────────────────────────────────────────────────
 _webui_passwords = {"read": "", "admin": ""}  # 從 config.json 載入
@@ -337,7 +341,7 @@ def _get_config():
     asr_engines = [
         {"value": "whisper", "label": "Whisper — 高準確度，既有主路徑"},
         {"value": "moonshine", "label": "Moonshine — 低延遲，僅英文"},
-        {"value": "qwen", "label": "QwenASR — 停頓觸發，規劃支援 OpenVINO / Vulkan"},
+        {"value": "qwen", "label": "QwenASR — 停頓觸發，支援 Python / Vulkan"},
     ]
     chunk_modes = [
         {"value": "pause_vad", "label": "停頓自動辨識（推薦）"},
@@ -456,11 +460,18 @@ def _get_config():
         summary_descs = {"gpt-oss:120b": "品質最好（推薦）", "gpt-oss:20b": "速度快，品質一般"}
     local_backends = []
     qwen_available = False
+    qwen_vulkan_available = False
+    qwen_vulkan_reason = ""
     try:
         if _tm_local_accel_backends is not None:
             local_backends = _tm_local_accel_backends()
         if _tm_has_qwen_asr_package is not None:
             qwen_available = bool(_tm_has_qwen_asr_package())
+        if _tm_has_qwen_vulkan_backend is not None:
+            qwen_vulkan_available = bool(_tm_has_qwen_vulkan_backend())
+            qwen_available = qwen_available or qwen_vulkan_available
+        if _tm_qwen_vulkan_missing_reason is not None:
+            qwen_vulkan_reason = _tm_qwen_vulkan_missing_reason() or ""
     except Exception:
         pass
     return {
@@ -470,6 +481,8 @@ def _get_config():
         "devices": devices, "auto_loopback": auto_loopback, "auto_mic": auto_mic,
         "gpu_host": gpu_host, "summary_descs": summary_descs,
         "local_backends": local_backends, "qwen_available": qwen_available,
+        "qwen_vulkan_available": qwen_vulkan_available,
+        "qwen_vulkan_reason": qwen_vulkan_reason,
         "recommended_models": recommended_models,
         "default_engine": "llm" if llm_host else "nllb",
         "last": last, "version": "2.16.6",

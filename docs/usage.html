@@ -44,6 +44,7 @@
     <p class="lead"><span class="zh">系統需求、音訊裝置設定、互動式選單、命令列參數與硬體建議——把整份操作手冊濃縮在這裡。需要逐步細節，請看<a href="sop.html">完整使用手冊</a>。</span><span class="en">Requirements, audio setup, the interactive menu, CLI flags and hardware tips — the whole manual, condensed. For step-by-step detail, see the <a href="sop.html">full manual</a>.</span></p>
     <div class="cta" style="margin-top:24px">
       <a class="btn btn-primary" href="sop.html"><span class="zh">完整使用手冊</span><span class="en">Full manual</span></a>
+      <a class="btn btn-ghost" href="qwen-vulkan-setup.md"><span class="zh">QwenASR Vulkan 設定</span><span class="en">QwenASR Vulkan setup</span></a>
       <a class="btn btn-ghost" href="https://github.com/sufrank/jt-live-whisper/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a>
     </div>
   </div>
@@ -152,6 +153,8 @@ cd C:\jt-live-whisper
     <div class="cmd-label"><span class="zh">即時模式（邊聽邊轉）</span><span class="en">Live mode</span></div>
 <pre><span class="c"># CLI 模式（跳過選單）</span>
 ./start.sh --mode en2zh --engine llm --llm-model qwen2.5:14b
+<span class="c"># QwenASR + 停頓觸發（Windows 建議）</span>
+.\start.ps1 --mode en2zh --asr qwen --qwen-backend auto --chunk-mode pause_vad
 <span class="c"># 英中雙向字幕（對方英文翻中文 + 自己中文翻英文）</span>
 ./start.sh --mode en_zh
 <span class="c"># 日中雙向字幕</span>
@@ -162,6 +165,8 @@ cd C:\jt-live-whisper
     <div class="cmd-label"><span class="zh">離線處理音訊檔</span><span class="en">Offline audio files</span></div>
 <pre><span class="c"># 英翻中 + 自動摘要</span>
 ./start.sh --input meeting.mp3 --summarize
+<span class="c"># QwenASR 離線辨識（Windows，可自動挑 Python / Vulkan）</span>
+.\start.ps1 --input meeting.mp3 --asr qwen --qwen-backend auto
 <span class="c"># 講者辨識</span>
 ./start.sh --input meeting.mp3 --diarize
 <span class="c"># 指定講者人數 + 摘要</span>
@@ -171,6 +176,7 @@ cd C:\jt-live-whisper
 <pre>./start.sh --summarize logs/英翻中_逐字稿_20260101_120000.txt</pre>
 
     <p class="note" style="margin-top:16px"><span class="zh"><strong>即時模式快捷鍵：</strong><code>Ctrl+C</code> 停止轉錄 · <code>Ctrl+P</code> 暫停 / 繼續。</span><span class="en"><strong>Live-mode shortcuts:</strong> <code>Ctrl+C</code> stop · <code>Ctrl+P</code> pause / resume.</span></p>
+    <p class="note"><span class="zh"><strong>QwenASR 補充：</strong>Windows 本機可選 <code>--asr qwen</code>，支援停頓觸發分段；若已準備 chatllm Vulkan 後端，<code>--qwen-backend auto</code> 會在沒有 CUDA 時自動切到 Vulkan。詳見 <a href="qwen-vulkan-setup.md">QwenASR Vulkan 設定</a>。</span><span class="en"><strong>QwenASR note:</strong> On Windows you can use <code>--asr qwen</code> with pause-triggered chunking. If chatllm Vulkan is installed, <code>--qwen-backend auto</code> switches to Vulkan when CUDA is unavailable. See <a href="qwen-vulkan-setup.md">QwenASR Vulkan setup</a>.</span></p>
   </div>
 </section>
 

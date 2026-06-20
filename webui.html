@@ -538,7 +538,9 @@ async function loadCfg(){
   _updateModelRec(cselVal($('iMode')));
   cselSetItems($('iAsr'),(c.asr_engines||[]).map(a=>({value:a.value,label:a.label,tag:a.value===(L.asr||'whisper')?'前次使用':''})));cselSetValue($('iAsr'),L.asr||'whisper');
   if(c.local_backends&&c.local_backends.length){$('asrHint').textContent+=' 本機後端：'+c.local_backends.join(' / ')+'。'}
-  if(c.qwen_available===false){$('asrHint').textContent+=' QwenASR 需先安裝 qwen-asr 套件。'}
+  if(c.qwen_vulkan_available===true){$('asrHint').textContent+=' 已偵測到 QwenASR Vulkan 後端，可用於 AMD / Intel / NVIDIA GPU。'}
+  else if(c.qwen_vulkan_reason){$('asrHint').textContent+=' Vulkan 狀態：'+c.qwen_vulkan_reason}
+  else if(c.qwen_available===false){$('asrHint').textContent+=' QwenASR 需先安裝 qwen-asr 套件，或準備 chatllm Vulkan 後端。'}
   cselSetItems($('iScene'),c.scenes.map(s=>({value:s.value,label:s.label,tag:tagFor(s.value,'training',L.scene)})));cselSetValue($('iScene'),L.scene||'training');
   cselSetItems($('iChunkMode'),(c.chunk_modes||[]).map(m=>({value:m.value,label:m.label,tag:m.value===(L.chunk_mode||'pause_vad')?'前次使用':''})));cselSetValue($('iChunkMode'),L.chunk_mode||'pause_vad');
   cselSetItems($('iQwenBackend'),(c.qwen_backends||[]).map(m=>({value:m.value,label:m.label,tag:m.value===(L.qwen_backend||'auto')?'前次使用':''})));cselSetValue($('iQwenBackend'),L.qwen_backend||'auto');
@@ -670,6 +672,7 @@ function engChg(){
   }else{micNote.style.display='none'}
   if(isBidi&&asr==='qwen'){showToast('雙向模式第一版不支援 QwenASR，已切回 Whisper','err');cselSetValue($('iAsr'),'whisper')}
   if((m==='zh'||m==='ja'||m==='zh2en'||m==='ja2zh'||m==='zh2ja')&&asr==='moonshine'){showToast('Moonshine 僅支援英文，已切回 Whisper','err');cselSetValue($('iAsr'),'whisper')}
+  if(!isFile&&asr==='qwen'&&$('iMic').checked){$('iMic').checked=false;showToast('QwenASR 即時模式目前不支援同時轉錄麥克風，已關閉麥克風選項','err')}
 }
 let _sumDescs={};
 function _sumLabel(m){const d=_sumDescs[m];return d?m+' — '+d:m}
@@ -683,7 +686,7 @@ async function go(){
   const asr=cselVal($('iAsr'))||'whisper';
   const eng=cselVal($('iEngine')),needLlm=eng==='llm'&&!['en','zh','ja','record'].includes(mode);
   // 防呆檢查
-  if(!isFile&&asr==='qwen'){showToast('QwenASR 即時模式尚未完成，請先用於離線處理或改用 Whisper','err');return}
+  if(!isFile&&asr==='qwen'&&$('iMic').checked){showToast('QwenASR 即時模式目前不支援同時轉錄麥克風，請先關閉麥克風選項','err');return}
   if(isFile&&!_selectedFiles.length){showToast('請先選擇至少一個音訊檔案','err');return}
   if(needLlm&&!$('iLlmHost').value.trim()){showToast('使用 LLM 翻譯引擎需填寫 LLM 主機地址','err');return}
   if(needLlm&&!cselVal($('iLlmModel'))){showToast('請先測試連線並選擇 LLM 模型','err');return}

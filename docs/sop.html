@@ -250,7 +250,11 @@ translate_meeting.py                            remote_whisper_server.py (FastAP
 <li><strong>Whisper</strong>（推薦，預設）：高準確度，完整斷句，支援中日英文，可在本機或 GPU 伺服器執行</li>
 <li><strong>Moonshine</strong>（替代，僅英文）：真串流架構，延遲 ~300ms（僅限本機）</li>
 <li><strong>faster-whisper</strong>（離線處理專用）：CTranslate2 引擎，Python API，支援 VAD，可在本機或 GPU 伺服器執行</li>
+<li><strong>QwenASR</strong>（Windows 本機）：支援即時與離線辨識，可用停頓觸發自動分段；後端可選官方 Python 或 Vulkan</li>
 </ul>
+<blockquote>
+<p>若要在 Windows 上使用 <code>QwenASR</code> 的 Vulkan 後端（AMD / Intel / NVIDIA GPU），請參考 <a href="qwen-vulkan-setup.md">QwenASR Vulkan 設定</a>。</p>
+</blockquote>
 <p>你仍然可以正常從喇叭或耳機聽到聲音。macOS 的 BlackHole 會額外複製一份音訊給辨識程式；Windows 的 WASAPI Loopback 則直接擷取系統播放的音訊，不需要安裝額外驅動。</p>
 <p><strong>目錄結構：</strong></p>
 <pre><code>realtime_voice_translate/

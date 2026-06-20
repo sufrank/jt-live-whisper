@@ -12,6 +12,8 @@
 | **目錄** | [核心功能](#核心功能) · [其他特色](#其他特色) · [系統需求](#系統需求) · [快速開始](#快速開始) · [使用方式](#使用方式) · [互動式選單](#互動式選單功能一覽) · [命令列參數](#命令列參數) · [技術架構](#技術架構) · [硬體建議](#硬體建議) · [升級](#升級) |
 |---|---|
 
+> QwenASR / 停頓觸發辨識 / Windows Vulkan（AMD / Intel / NVIDIA）設定請見 [docs/qwen-vulkan-setup.md](docs/qwen-vulkan-setup.md)。
+
 核心功能涵蓋即時語音轉錄、中日英即時翻譯字幕、離線音訊檔批次處理、講者辨識（Speaker Diarization）、以及 LLM 會議摘要產出。採用系統音訊裝置層級擷取（macOS 使用 BlackHole，Windows 使用 WASAPI Loopback），**理論上任何軟體的聲音輸出都能即時處理**：視訊會議（Zoom、Teams、Meet）、YouTube、Podcast、串流影片等，不限定特定應用程式。所有 AI 推論皆由地端模型完成，全程不經過第三方雲端 API。
 
 Author: Jason Cheng (Jason Tools)
@@ -53,6 +55,7 @@ Author: Jason Cheng (Jason Tools)
 |------|---------|------|
 | 語音辨識 (ASR) | **whisper.cpp** | macOS 即時辨識引擎，支援中日英文，可在本機或 GPU 伺服器執行 |
 | 語音辨識 (ASR) | **faster-whisper** (CTranslate2) | Windows 即時辨識 + 全平台離線處理，支援 VAD 靜音過濾 |
+| 語音辨識 (ASR) | **QwenASR** | Windows 本機即時 / 離線辨識，支援停頓觸發分段；可走官方 Python 後端或 Vulkan 後端（AMD / Intel / NVIDIA） |
 | 語音辨識 (ASR) | **mlx-whisper** | Apple Silicon GPU 加速，雙向模式（en_zh / ja_zh）即時辨識專用 |
 | 語音辨識 (ASR) | **Moonshine** (Useful Sensors) | 超低延遲串流辨識模型，英文專用（僅限 Apple Silicon） |
 | 翻譯 / 摘要 | 搭配自架 LLM 伺服器使用，推薦 **Qwen** / **Phi-4** / **GPT-OSS** 等模型 | 透過地端 Ollama 或其他 LLM 伺服器執行（本機或區域網路），翻譯建議 14B 以上、摘要建議 120B 以上 |
@@ -156,7 +159,7 @@ Author: Jason Cheng (Jason Tools)
 ## 其他特色
 
 - **同時轉錄麥克風**：所有即時模式加上 `--mic` 即可同時轉錄自己的麥克風語音，雙向模式自動啟用
-- **多種本地端 AI 語音辨識引擎**：即時辨識：Whisper（高準確度）/ Moonshine（超低延遲 ~300ms）；離線音訊檔轉錄：faster-whisper（支援 VAD 靜音過濾）
+- **多種本地端 AI 語音辨識引擎**：即時辨識：Whisper（高準確度）/ QwenASR（停頓觸發，Windows 可選 Python / Vulkan）/ Moonshine（超低延遲 ~300ms）；離線音訊檔轉錄：faster-whisper 或 QwenASR（支援停頓分段 / VAD）
 - **多種本地端翻譯引擎**：LLM 大型語言模型（Ollama / OpenAI 相容伺服器）、NLLB 離線翻譯（中日英互譯）或 Argos 離線翻譯
 - **會議主題感知翻譯**：可指定會議主題（如「ZFS 儲存管理」），讓 LLM 根據領域上下文精準翻譯專業術語
 - **自動偵測 LLM 伺服器**：支援 Ollama、LM Studio、Jan.ai、vLLM、LocalAI、llama.cpp、LiteLLM 等本地端 LLM 伺服器

@@ -770,6 +770,9 @@ check_venv() {
     if ! python3 -c "import faster_whisper" &>/dev/null 2>&1; then
         missing_pkgs+=("faster-whisper")
     fi
+    if ! python3 -c "import qwen_asr" &>/dev/null 2>&1; then
+        missing_pkgs+=("qwen-asr")
+    fi
     if ! python3 -c "import resemblyzer" &>/dev/null 2>&1; then
         # resemblyzer 依賴 webrtcvad，webrtcvad 需要 pkg_resources（setuptools < 81）
         if ! python3 -c "import pkg_resources" &>/dev/null 2>&1; then
@@ -813,6 +816,7 @@ check_venv() {
             sounddevice)               echo "sounddevice（音訊擷取）" ;;
             numpy*)                    echo "numpy（數值計算）" ;;
             faster-whisper)            echo "faster-whisper（離線語音辨識）" ;;
+            qwen-asr)                  echo "qwen-asr（QwenASR 即時/離線辨識）" ;;
             resemblyzer)               echo "resemblyzer（講者辨識 - 聲紋提取）" ;;
             spectralcluster)           echo "spectralcluster（講者辨識 - 分群）" ;;
             noisereduce)               echo "noisereduce（背景降噪）" ;;
@@ -833,6 +837,7 @@ check_venv() {
             sounddevice)    echo "sounddevice（音訊擷取）" ;;
             numpy)          echo "numpy（數值計算）" ;;
             faster_whisper) echo "faster-whisper（離線語音辨識）" ;;
+            qwen_asr)       echo "qwen-asr（QwenASR 即時/離線辨識）" ;;
             resemblyzer)    echo "resemblyzer（講者辨識 - 聲紋提取）" ;;
             spectralcluster) echo "spectralcluster（講者辨識 - 分群）" ;;
             noisereduce)    echo "noisereduce（背景降噪）" ;;
@@ -857,7 +862,7 @@ check_venv() {
         done
         # 驗證（用 import 名稱，不是 pip 套件名稱）
         local all_ok=1
-        for pkg in ctranslate2 sentencepiece opencc sounddevice numpy faster_whisper resemblyzer spectralcluster noisereduce; do
+        for pkg in ctranslate2 sentencepiece opencc sounddevice numpy faster_whisper qwen_asr resemblyzer spectralcluster noisereduce; do
             local label
             label="$(_import_label "$pkg")"
             if python3 -c "import $pkg" &>/dev/null 2>&1; then
@@ -2302,6 +2307,7 @@ verify_installation() {
         "ctranslate2|ctranslate2（語音辨識加速）"
         "sentencepiece|sentencepiece（分詞工具）"
         "faster_whisper|faster-whisper（離線辨識）"
+        "qwen_asr|qwen-asr（QwenASR）"
         "resemblyzer|resemblyzer（講者辨識）"
         "spectralcluster|spectralcluster（講者分群）"
         "sounddevice|sounddevice（音訊擷取）"
@@ -2390,6 +2396,20 @@ print_summary() {
         echo -e "  ${C_OK}■${NC} 離線音訊處理 (--input)  ${C_DIM}faster-whisper${NC}"
     else
         echo -e "  ${C_DIM}□ 離線音訊處理 (--input)  faster-whisper${NC}"
+    fi
+
+    # QwenASR
+    if python3 -c "import qwen_asr" &>/dev/null 2>&1; then
+        echo -e "  ${C_OK}■${NC} QwenASR 即時/離線辨識  ${C_DIM}官方 qwen-asr${NC}"
+    else
+        echo -e "  ${C_DIM}□ QwenASR 即時/離線辨識  官方 qwen-asr${NC}"
+    fi
+
+    # QwenASR Vulkan
+    if [ -f "$SCRIPT_DIR/chatllm/main.exe" ] && [ -f "$SCRIPT_DIR/GPUModel/qwen3-asr-1.7b.bin" ]; then
+        echo -e "  ${C_OK}■${NC} QwenASR Vulkan 後端  ${C_DIM}chatllm + qwen3-asr-1.7b.bin${NC}"
+    else
+        echo -e "  ${C_DIM}□ QwenASR Vulkan 後端  chatllm + qwen3-asr-1.7b.bin${NC}"
     fi
 
     # faster-whisper 模型
