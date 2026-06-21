@@ -1123,6 +1123,14 @@ def _resolve_qwen_model_repo(model_hint=None):
     return "Qwen/Qwen3-ASR-0.6B"
 
 
+def _qwen_model_display_name(model_hint=None, runtime="python", vulkan_model_path=None):
+    if runtime == "vulkan":
+        if vulkan_model_path:
+            return f"Vulkan {os.path.basename(vulkan_model_path)}"
+        return "Vulkan qwen3-asr-1.7b.bin"
+    return _resolve_qwen_model_repo(model_hint).replace("Qwen/", "")
+
+
 def _load_qwen_asr_model(model_hint=None, with_timestamps=False):
     repo = _resolve_qwen_model_repo(model_hint)
     cache_key = (repo, bool(with_timestamps))
@@ -6835,14 +6843,18 @@ def run_stream_local_qwen(capture_id: int, translator,
             device_id = devices[0]["id"]
         device_name = next((d["name"] for d in devices if d["id"] == device_id), f"GPU:{device_id}")
         print(f"\n{C_DIM}正在載入 QwenASR Vulkan 模型 ({os.path.basename(model_path)})...{RESET}", end="", flush=True)
-        _webui_send({"type": "progress", "stage": "載入中", "detail": f"QwenASR Vulkan（{device_name}）"})
+        _webui_send({"type": "progress", "stage": "載入中",
+                     "detail": f"QwenASR Vulkan（{device_name}）",
+                     "actual_model": _qwen_model_display_name(runtime="vulkan", vulkan_model_path=model_path)})
         t0 = time.monotonic()
         qwen_runner = _QwenVulkanRunner(model_path=model_path, chatllm_dir=s["chatllm_dir"], device_id=device_id)
         print(f" {C_OK}完成（{time.monotonic() - t0:.1f}s）{RESET}")
-        qwen_repo = f"Vulkan:{os.path.basename(model_path)}"
+        qwen_repo = _qwen_model_display_name(runtime="vulkan", vulkan_model_path=model_path)
     else:
         print(f"\n{C_DIM}正在載入 QwenASR 模型 ({qwen_repo})...{RESET}", end="", flush=True)
-        _webui_send({"type": "progress", "stage": "載入中", "detail": f"QwenASR 模型（{qwen_repo}）"})
+        _webui_send({"type": "progress", "stage": "載入中",
+                     "detail": f"QwenASR 模型（{qwen_repo}）",
+                     "actual_model": _qwen_model_display_name(model_hint, runtime="python")})
         t0 = time.monotonic()
         qwen_model = _load_qwen_asr_model(model_hint, with_timestamps=False)
         print(f" {C_OK}完成（{time.monotonic() - t0:.1f}s）{RESET}")
@@ -7301,7 +7313,7 @@ def run_stream_local_qwen(capture_id: int, translator,
         "ja": "說日文即可看到字幕",
     }
     print(f"\n{C_OK}{BOLD}開始監聽...{RESET} {C_WHITE}{listen_hints.get(mode, '')}{RESET}\n\n", flush=True)
-    _webui_send({"type": "started", "mode": mode})
+    _webui_send({"type": "started", "mode": mode, "actual_model": qwen_repo})
 
     _tr_model = translator.model if isinstance(translator, OllamaTranslator) else ("NLLB" if isinstance(translator, NllbTranslator) else ("Argos" if isinstance(translator, ArgosTranslator) else ""))
     _tr_loc = "伺服器" if isinstance(translator, OllamaTranslator) else ("本機" if isinstance(translator, (ArgosTranslator, NllbTranslator)) else "")
@@ -11018,24 +11030,28 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
             if not any(d["id"] == device_id for d in devices):
                 device_id = devices[0]["id"]
             device_name = next((d["name"] for d in devices if d["id"] == device_id), f"GPU:{device_id}")
-            qwen_repo = f"Vulkan:{os.path.basename(model_path)}"
+            qwen_repo = _qwen_model_display_name(runtime="vulkan", vulkan_model_path=model_path)
             qwen_runtime_used = "vulkan"
-            qwen_model_used = model_path
+            qwen_model_used = qwen_repo
             print(f"  {C_WHITE}辨識位置    本機（QwenASR Vulkan: {device_name}）{RESET}")
             print(f"  {C_WHITE}載入模型    {qwen_repo}...{RESET}", end=" ", flush=True)
             qwen_runner = _QwenVulkanRunner(model_path=model_path, chatllm_dir=s["chatllm_dir"], device_id=device_id)
             print(f"{C_OK}✓{RESET}")
             print(f"  {C_WHITE}辨識中...{RESET}\n")
-            _webui_send({"type": "progress", "stage": "辨識中", "detail": f"本機 QwenASR Vulkan"})
+            _webui_send({"type": "progress", "stage": "辨識中",
+                         "detail": f"本機 QwenASR Vulkan",
+                         "actual_model": qwen_model_used})
         else:
             qwen_runtime_used = "python"
-            qwen_model_used = qwen_repo
+            qwen_model_used = _qwen_model_display_name(model_size, runtime="python")
             print(f"  {C_WHITE}辨識位置    本機（QwenASR）{RESET}")
             print(f"  {C_WHITE}載入模型    {qwen_repo}...{RESET}", end=" ", flush=True)
             qwen_model = _load_qwen_asr_model(model_size, with_timestamps=True)
             print(f"{C_OK}✓{RESET}")
             print(f"  {C_WHITE}辨識中...{RESET}\n")
-            _webui_send({"type": "progress", "stage": "辨識中", "detail": f"本機 QwenASR"})
+            _webui_send({"type": "progress", "stage": "辨識中",
+                         "detail": f"本機 QwenASR",
+                         "actual_model": qwen_model_used})
 
         sbar = _SummaryStatusBar(model=qwen_repo, task="辨識中", asr_location="本機").start()
         if audio_duration > 0:

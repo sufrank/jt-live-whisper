@@ -869,8 +869,10 @@ def _build_args(body: dict) -> list:
             args.extend(["--input", f])
     mode = body.get("mode", "en2zh")
     args.extend(["--mode", mode])
+    asr = body.get("asr")
     model = body.get("model", "large-v3-turbo")
-    args.extend(["-m", model])
+    if asr != "qwen":
+        args.extend(["-m", model])
     scene = body.get("scene", "training")
     args.extend(["-s", scene])
     engine = body.get("engine")
@@ -907,7 +909,6 @@ def _build_args(body: dict) -> list:
             args.extend(["--summary-rounds", str(int(sr))])
     if body.get("local_asr"):
         args.append("--local-asr")
-    asr = body.get("asr")
     if asr:
         args.extend(["--asr", asr])
     chunk_mode = body.get("chunk_mode")
