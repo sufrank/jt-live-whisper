@@ -837,8 +837,8 @@ async def api_test_llm(body: dict = {}):
         return JSONResponse({"ok": False, "error": "未填入主機位址"})
     import urllib.request
     import urllib.error
-    # 嘗試 Ollama /api/tags 和 OpenAI /v1/models
-    for path in ["/api/tags", "/v1/models"]:
+    # 先嘗試 OpenAI 相容端點，避免 LM Studio 等同時提供其他端點時被誤判成 Ollama
+    for path in ["/v1/models", "/api/tags"]:
         url = f"http://{host}{path}"
         try:
             req = urllib.request.Request(url, method="GET")
@@ -846,15 +846,20 @@ async def api_test_llm(body: dict = {}):
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode())
                 models = []
-                if "models" in data:
-                    # Ollama format
-                    models = [m.get("name", "") for m in data["models"] if m.get("name")]
-                elif "data" in data:
+                server_type = None
+                if isinstance(data, dict) and isinstance(data.get("data"), list):
                     # OpenAI format
-                    models = [m.get("id", "") for m in data["data"] if m.get("id")]
-                server_type = "ollama" if "/api/" in path else "openai"
-                return JSONResponse({"ok": True, "server_type": server_type,
-                                     "models": models[:20], "url": url})
+                    models = [m.get("id", "") for m in data["data"]
+                              if isinstance(m, dict) and m.get("id")]
+                    server_type = "openai"
+                elif isinstance(data, dict) and isinstance(data.get("models"), list):
+                    # Ollama format
+                    models = [m.get("name", "") for m in data["models"]
+                              if isinstance(m, dict) and m.get("name")]
+                    server_type = "ollama"
+                if server_type:
+                    return JSONResponse({"ok": True, "server_type": server_type,
+                                         "models": models[:20], "url": url})
         except Exception:
             continue
     return JSONResponse({"ok": False, "error": f"無法連線 {host}（已嘗試 Ollama 和 OpenAI 相容 API）"})
