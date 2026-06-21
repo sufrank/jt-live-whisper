@@ -242,15 +242,15 @@ kbd{display:inline-block;font-family:inherit;font-size:10px;padding:1px 5px;bord
   <!-- 語音辨識 -->
   <div class="sec">
     <div class="sec-title"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><rect x="9" y="2" width="6" height="12" rx="3" stroke="currentColor"/><path d="M5 10V11C5 14.866 8.13401 18 12 18C15.866 18 19 14.866 19 11V10" stroke="currentColor" stroke-linecap="round"/><path d="M12 18V22M12 22H9M12 22H15" stroke="currentColor" stroke-linecap="round"/></svg>語音辨識</div>
-    <div class="sec-hint" id="asrHint">選擇辨識模式與引擎。雙向模式建議使用耳麥避免影響。場景的緩衝長度越長句子越完整，越短反應越即時。</div>
+    <div class="sec-hint" id="asrHint">選擇辨識模式與引擎。雙向模式建議使用耳麥避免影響。固定週期可再用場景調整緩衝長度；停頓自動辨識則用停頓與 VAD 參數控制分段。</div>
     <div class="fg"><label>功能模式</label><div class="csel" id="iMode" data-value=""></div></div>
     <div class="fg" id="rAsrLoc"><label>辨識位置</label><div class="csel" id="iAsrLoc" data-value=""></div></div>
     <div class="fg"><label>ASR 引擎</label><div class="csel" id="iAsr" data-value=""></div></div>
+    <div class="fg"><label>分段方式</label><div class="csel" id="iChunkMode" data-value=""></div></div>
     <div id="rModelScene">
       <div class="fg" id="rModel"><label>辨識模型</label><div class="csel" id="iModel" data-value=""></div></div>
       <div class="fg" id="rScene"><label>場景</label><div class="csel" id="iScene" data-value=""></div></div>
     </div>
-    <div class="fg"><label>分段方式</label><div class="csel" id="iChunkMode" data-value=""></div></div>
     <div class="fg" id="rQwenBackend" style="display:none"><label>Qwen 後端</label><div class="csel" id="iQwenBackend" data-value=""></div></div>
     <div class="row3" id="rPauseTuning" style="margin-top:8px">
       <div class="fg"><label>停頓 ms</label><input id="iPauseMs" type="number" min="100" max="5000" value="800"></div>
@@ -597,7 +597,7 @@ async function loadCfg(){
   }
   $('cfgLoading').style.display='none';$('cfgCard').style.opacity='1';initCollapsible();
 }
-function onSourceChg(){const isFile=cselVal($('iSource'))==='file';$('fileArea').classList.toggle('show',isFile);$('rDevices').style.display=isFile?'none':'';$('rScene').style.display=isFile?'none':'';$('rOffline').style.display=isFile?'':'none';$('rAsrLoc').style.display=isFile?'':'';$('iDenoise').parentElement.style.display=isFile?'none':'';$('iRec').parentElement.style.display=isFile?'none':'';$('iMic').parentElement.style.display=isFile?'none':'';$('asrHint').textContent=isFile?'選擇辨識模式與引擎。雙向模式建議使用耳麥避免影響。':'選擇辨識模式與引擎。雙向模式建議使用耳麥避免影響。場景的緩衝長度越長句子越完整，越短反應越即時。';if(isFile)loadFiles()}
+function onSourceChg(){const isFile=cselVal($('iSource'))==='file';$('fileArea').classList.toggle('show',isFile);$('rDevices').style.display=isFile?'none':'';$('rScene').style.display=isFile?'none':'';$('rOffline').style.display=isFile?'':'none';$('rAsrLoc').style.display=isFile?'':'';$('iDenoise').parentElement.style.display=isFile?'none':'';$('iRec').parentElement.style.display=isFile?'none':'';$('iMic').parentElement.style.display=isFile?'none':'';$('asrHint').textContent='選擇辨識模式與引擎。雙向模式建議使用耳麥避免影響。固定週期可再用場景調整緩衝長度；停頓自動辨識則用停頓與 VAD 參數控制分段。';if(isFile)loadFiles()}
 function onDiarizeChg(){$('rNumSpk').style.display=$('iDiarize').checked?'':'none'}
 function onSummarizeChg(){const on=$('iSummarize').checked;$('rSumModel').style.display=on?'':'none';$('iSumRounds').disabled=!on;$('rSumRoundsHint').style.display=on&&parseInt($('iSumRounds').value)>1?'':'none'}
 $('iSumRounds').addEventListener('change',onSummarizeChg);
@@ -628,17 +628,19 @@ let _allEngines=[];
 function engChg(){
   const m=cselVal($('iMode')),isT=['en','zh','ja','record'].includes(m),isRec=m==='record',isFile=cselVal($('iSource'))==='file';
   const asr=cselVal($('iAsr'))||'whisper',chunkMode=cselVal($('iChunkMode'))||'pause_vad';
+  const isFixedChunk=chunkMode==='fixed';
   $('rEngine').style.display=isT?'none':'';
   // 純錄音：只需模式 + 裝置
   $('rModelScene').style.display=isRec?'none':'';
   $('rModel').style.display=asr==='qwen'?'none':'';
+  $('rScene').style.display=(!isRec&&isFixedChunk)?'':'none';
   $('rOther').style.display=isRec?'none':'';
   const isBidi=['en_zh','ja_zh'].includes(m);
   if(isRec){$('rAsrLoc').style.display='none';$('rOffline').style.display='none'}
   else{$('rOffline').style.display=isFile?'':'none'}
   $('rQwenBackend').style.display=asr==='qwen'?'':'none';
-  $('rPauseTuning').style.display=(chunkMode==='pause_vad'&&!isRec)?'grid':'none';
-  $('rVadThreshold').style.display=(chunkMode==='pause_vad'&&!isRec)?'':'none';
+  $('rPauseTuning').style.display=(!isRec&&!isFixedChunk)?'grid':'none';
+  $('rVadThreshold').style.display=(!isRec&&!isFixedChunk)?'':'none';
   // 雙向模式：強制本機，GPU 不支援
   if(isBidi&&!isFile){
     const asrItems=[{value:'gpu',label:'GPU 伺服器（雙向模式不支援）',tag:'不支援此模式',disabled:true},{value:'local',label:'本機',tag:''}];
@@ -697,7 +699,7 @@ async function go(){
   const asrLabel=asr==='qwen'?'QwenASR':(asr==='moonshine'?'Moonshine':cselVal($('iModel')));
   curCfg={mode,modeLabel:_modeLabels[mode]||mode,model:asrLabel,actualModel:'',engine:eng,asr:cselVal($('iAsr')),asrLoc,isFile,record:$('iRec').checked,denoise:$('iDenoise').checked,mic:$('iMic').checked,diarize:isFile&&$('iDiarize').checked,summarize:isFile&&$('iSummarize').checked,subtitle_overlay:$('iOvEnable')&&$('iOvEnable').checked};
   $('goBtn').disabled=true;$('goBtn').textContent='啟動中...';
-  try{const b={mode,scene:cselVal($('iScene')),asr:cselVal($('iAsr')),chunk_mode:cselVal($('iChunkMode')),qwen_backend:cselVal($('iQwenBackend')),pause_ms:parseInt($('iPauseMs').value)||800,min_speech_ms:parseInt($('iMinSpeechMs').value)||250,max_segment_ms:parseInt($('iMaxSegmentMs').value)||12000,vad_threshold:parseFloat($('iVadThreshold').value)||0.006,engine:cselVal($('iEngine')),llm_model:cselVal($('iLlmModel')),llm_host:$('iLlmHost').value,topic:$('iTopic').value,record:$('iRec').checked,mic:$('iMic').checked,denoise:$('iDenoise').checked,local_asr:cselVal($('iAsrLoc'))==='local',device:cselVal($('iDevice'))||null,subtitle_overlay:$('iOvEnable')&&$('iOvEnable').checked,fwd_enabled:$('iFwdEnable')&&$('iFwdEnable').checked,kw_enabled:$('iKwEnable')&&$('iKwEnable').checked};
+  try{const b={mode,scene:(chunkMode==='fixed'?(cselVal($('iScene'))||'training'):'training'),asr:cselVal($('iAsr')),chunk_mode:cselVal($('iChunkMode')),qwen_backend:cselVal($('iQwenBackend')),pause_ms:parseInt($('iPauseMs').value)||800,min_speech_ms:parseInt($('iMinSpeechMs').value)||250,max_segment_ms:parseInt($('iMaxSegmentMs').value)||12000,vad_threshold:parseFloat($('iVadThreshold').value)||0.006,engine:cselVal($('iEngine')),llm_model:cselVal($('iLlmModel')),llm_host:$('iLlmHost').value,topic:$('iTopic').value,record:$('iRec').checked,mic:$('iMic').checked,denoise:$('iDenoise').checked,local_asr:cselVal($('iAsrLoc'))==='local',device:cselVal($('iDevice'))||null,subtitle_overlay:$('iOvEnable')&&$('iOvEnable').checked,fwd_enabled:$('iFwdEnable')&&$('iFwdEnable').checked,kw_enabled:$('iKwEnable')&&$('iKwEnable').checked};
   if(asr!=='qwen')b.model=cselVal($('iModel'));
   if(isFile&&_selectedFiles.length){b.input_files=_selectedFiles;if($('iDiarize').checked){b.diarize=true;const ns=parseInt($('iNumSpk').value)||0;if(ns>0)b.num_speakers=ns}if($('iSummarize').checked){b.summarize=true;const sm=cselVal($('iSumModel'));if(sm)b.summary_model=sm;const sr=parseInt($('iSumRounds').value)||1;if(sr>1)b.summary_rounds=sr}if(!$('iGenSrt').checked)b.no_srt=true;if(!$('iGenVtt').checked)b.no_vtt=true}
   const r=await fetch('/api/start',{method:'POST',headers:_authHeaders(),body:JSON.stringify(b)});const d=await r.json();
@@ -742,7 +744,8 @@ function _showLiveIn(live){
   // 場景膠囊（即時模式才顯示）
   const _sceneLabels={'meeting':'會議 5s','training':'訓練 8s','presentation':'簡報 12s','subtitle':'字幕 3s'};
   const _sceneVal=cselVal($('iScene'))||'training';
-  if(!curCfg.isFile){$('sScene').textContent=_sceneLabels[_sceneVal]||_sceneVal;$('bScene').style.display='inline-flex'}else{$('bScene').style.display='none'}
+  const _chunkVal=cselVal($('iChunkMode'))||'pause_vad';
+  if(!curCfg.isFile&&_chunkVal==='fixed'){$('sScene').textContent=_sceneLabels[_sceneVal]||_sceneVal;$('bScene').style.display='inline-flex'}else{$('bScene').style.display='none'}
   // 錄音/降噪移到底部
   $('bRec').style.display=!curCfg.isFile&&curCfg.record?'inline-flex':'none';$('bDenoise').style.display=!curCfg.isFile&&curCfg.denoise?'inline-flex':'none';$('bMic').style.display=!curCfg.isFile&&curCfg.mic?'inline-flex':'none';
   $('bDiarize').style.display=curCfg.diarize?'inline-flex':'none';
@@ -875,7 +878,7 @@ const _tips={
   iMode:'選擇翻譯方向或轉錄語言。雙向模式建議使用耳麥',
   iAsrLoc:'GPU 伺服器辨識速度快；本機不需網路但較慢',
   iModel:'較大的模型準確度較高但速度較慢。標有「此裝置適合」的為推薦',
-  iScene:'緩衝長度越長句子越完整，越短反應越即時',
+  iScene:'固定週期模式下的緩衝長度設定。越長句子越完整，越短反應越即時',
   // 語言翻譯
   iEngine:'LLM 品質最好需伺服器，NLLB/Argos 為本機離線',
   iLlmHost:'Ollama 或 OpenAI 相容伺服器的 IP:Port',
