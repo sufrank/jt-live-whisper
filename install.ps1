@@ -418,6 +418,18 @@ function ensure_qwen_vulkan_assets() {
             check_notice "qwen3-asr-1.7b.bin 下載失敗，可稍後重新執行 .\\install.ps1"
         }
     }
+
+    if ((Test-Path $chatllmExe) -and (Test-Path $chatllmVkDll) -and (Test-Path $qwenModelPath)) {
+        $cfgToSave = read_config
+        $qwenVkObj = [PSCustomObject]@{
+            chatllm_dir = $chatllmDir
+            model_path  = $qwenModelPath
+            device_id   = 0
+        }
+        $cfgToSave | Add-Member -NotePropertyName "qwen_vulkan" -NotePropertyValue $qwenVkObj -Force
+        save_config $cfgToSave
+        check_ok "QwenASR Vulkan 設定已儲存至 config.json"
+    }
 }
 
 # ─── Banner ───────────────────────────────────────────────────
