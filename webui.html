@@ -687,6 +687,7 @@ async function go(){
   const mode=cselVal($('iMode')),isFile=cselVal($('iSource'))==='file';
   const asrLoc=cselVal($('iAsrLoc'))==='local'?'本機':'GPU 伺服器';
   const asr=cselVal($('iAsr'))||'whisper';
+  const chunkMode=cselVal($('iChunkMode'))||'pause_vad';
   const eng=cselVal($('iEngine')),needLlm=eng==='llm'&&!['en','zh','ja','record'].includes(mode);
   // 防呆檢查
   if(!isFile&&asr==='qwen'&&$('iMic').checked){showToast('QwenASR 即時模式目前不支援同時轉錄麥克風，請先關閉麥克風選項','err');return}
