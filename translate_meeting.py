@@ -2503,11 +2503,13 @@ class OllamaTranslator:
         self.direction = direction
         self.host = host
         self.port = port
-        self.server_type = server_type
+        if server_type not in ("ollama", "openai"):
+            server_type = _detect_llm_server(host, port)
+        self.server_type = server_type or "ollama"
         self.meeting_topic = meeting_topic
         self.context = []  # [(src, dst), ...]
         if not skip_check:
-            srv_label = "Ollama" if server_type == "ollama" else "LLM"
+            srv_label = "Ollama" if self.server_type == "ollama" else "OpenAI 相容"
             print(f"{C_DIM}正在連接 {srv_label} ({model})...{RESET}", end=" ", flush=True)
             _webui_send({"type": "progress", "stage": "載入中", "detail": f"連接 {srv_label}（{model}）"})
             try:
@@ -2938,20 +2940,24 @@ class NllbTranslator:
 
 def _detect_llm_server(host, port):
     """自動偵測 LLM 伺服器類型，回傳 "ollama" / "openai" / None"""
-    # 先嘗試 Ollama
-    try:
-        req = urllib.request.Request(f"http://{host}:{port}/api/tags")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            resp.read()
-            return "ollama"
-    except Exception:
-        pass
-    # 再嘗試 OpenAI 相容
+    # 先看 OpenAI 相容回應結構，避免 LM Studio 等同時提供相容端點時被誤判成 Ollama
     try:
         req = urllib.request.Request(f"http://{host}:{port}/v1/models")
         with urllib.request.urlopen(req, timeout=3) as resp:
-            resp.read()
-            return "openai"
+            data = json.loads(resp.read())
+            if isinstance(data, dict) and isinstance(data.get("data"), list):
+                if any(isinstance(m, dict) and m.get("id") for m in data["data"]):
+                    return "openai"
+    except Exception:
+        pass
+    # 再嘗試 Ollama
+    try:
+        req = urllib.request.Request(f"http://{host}:{port}/api/tags")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read())
+            if isinstance(data, dict) and isinstance(data.get("models"), list):
+                if any(isinstance(m, dict) and m.get("name") for m in data["models"]):
+                    return "ollama"
     except Exception:
         pass
     return None
@@ -2960,6 +2966,8 @@ def _detect_llm_server(host, port):
 def _llm_list_models(host, port, server_type):
     """列出 LLM 伺服器上的模型，回傳 list[str]"""
     try:
+        if server_type not in ("ollama", "openai"):
+            server_type = _detect_llm_server(host, port)
         if server_type == "ollama":
             req = urllib.request.Request(f"http://{host}:{port}/api/tags")
             with urllib.request.urlopen(req, timeout=5) as resp:
@@ -3887,6 +3895,8 @@ def select_translator(init_host=None, init_port=None, mode="en2zh"):
 
 def _select_llm_model(host, port, server_type):
     """CLI 模式下讓使用者選擇 LLM 翻譯模型（-e llm 但沒指定 --llm-model）"""
+    if server_type not in ("ollama", "openai"):
+        server_type = _detect_llm_server(host, port)
     available_models = _llm_list_models(host, port, server_type)
 
     if not available_models:
@@ -4236,7 +4246,7 @@ def _input_interactive_menu(args):
 
             if not _use_argos and not _use_nllb:
                 # 翻譯模型：動態查詢伺服器模型 + 本機離線選項
-                all_translate_models = _llm_list_models(ollama_host, ollama_port, llm_server_type or "ollama")
+                all_translate_models = _llm_list_models(ollama_host, ollama_port, llm_server_type)
                 translate_models = []  # (name, desc, engine)
                 for m_name in all_translate_models:
                     desc = next((d for n, d in OLLAMA_MODELS if n == m_name), "")
@@ -4446,7 +4456,7 @@ def _input_interactive_menu(args):
                 summary_model = ollama_model or SUMMARY_DEFAULT_MODEL
             else:
                 # 摘要模型：列出伺服器上所有模型
-                all_summary_models = _llm_list_models(ollama_host, ollama_port, llm_server_type or "ollama")
+                all_summary_models = _llm_list_models(ollama_host, ollama_port, llm_server_type)
                 summary_models_list = []
                 for m_name in all_summary_models:
                     desc = next((d for n, d in SUMMARY_MODELS if n == m_name), "")
@@ -14228,7 +14238,7 @@ def main():
                     if not server_type:
                         server_type = _detect_llm_server(host, port)
                     if host:
-                        ollama_model = args.ollama_model or _select_llm_model(host, port, server_type or "ollama")
+                        ollama_model = args.ollama_model or _select_llm_model(host, port, server_type)
                     else:
                         # 無 LLM 伺服器，降級 Argos
                         engine = "argos"
@@ -14291,9 +14301,6 @@ def main():
                 model_name_display = ollama_model if need_llm_translate else summary_model
                 pad = " " * (12 - _str_display_width(label))
                 print(f"  {C_WHITE}{label}{pad}{RESET}{C_WHITE}{model_name_display}{RESET} {C_DIM}@ {host}:{port}{RESET} {C_HIGHLIGHT}✗ 無法連接{RESET}")
-
-        if not server_type:
-            server_type = "ollama"
 
         # 初始化翻譯器（meeting_topic 已在互動選單或 CLI 分支中設定）
         # 雙向模式用 loopback 方向建主翻譯器，mic 翻譯器在 bidi pair 偵測後另建
@@ -14894,7 +14901,7 @@ def main():
             # 翻譯引擎
             meeting_topic = args.topic
             host, port = _resolve_ollama_host(args)
-            srv_type = _detect_llm_server(host, port) or "ollama"
+            srv_type = _detect_llm_server(host, port)
             ollama_model = None
             if args.engine or args.ollama_model or args.ollama_host:
                 engine = args.engine or "llm"
@@ -15000,7 +15007,7 @@ def main():
             translator = None
             meeting_topic = args.topic
             host, port = _resolve_ollama_host(args)
-            srv_type = _detect_llm_server(host, port) or "ollama"
+            srv_type = _detect_llm_server(host, port)
             if mode in _TRANSLATE_MODES:
                 ollama_model = None
                 if args.engine or args.ollama_model or args.ollama_host:
@@ -15108,7 +15115,7 @@ def main():
 
             translator = None
             host, port = _resolve_ollama_host(args)
-            srv_type = _detect_llm_server(host, port) or "ollama"
+            srv_type = _detect_llm_server(host, port)
             meeting_topic = args.topic
             if mode == "en2zh":
                 ollama_model = None
@@ -15166,7 +15173,7 @@ def main():
 
             translator = None
             host, port = _resolve_ollama_host(args)
-            srv_type = _detect_llm_server(host, port) or "ollama"
+            srv_type = _detect_llm_server(host, port)
             meeting_topic = args.topic
             if mode in _TRANSLATE_MODES:
                 ollama_model = None
@@ -15272,7 +15279,7 @@ def main():
             translator = None
             meeting_topic = args.topic
             host, port = _resolve_ollama_host(args)
-            srv_type = _detect_llm_server(host, port) or "ollama"
+            srv_type = _detect_llm_server(host, port)
             if mode in _TRANSLATE_MODES:
                 ollama_model = None
                 if args.engine or args.ollama_model or args.ollama_host:
