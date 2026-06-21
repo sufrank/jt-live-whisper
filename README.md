@@ -12,7 +12,7 @@
 | **目錄** | [核心功能](#核心功能) · [其他特色](#其他特色) · [系統需求](#系統需求) · [快速開始](#快速開始) · [使用方式](#使用方式) · [互動式選單](#互動式選單功能一覽) · [命令列參數](#命令列參數) · [技術架構](#技術架構) · [硬體建議](#硬體建議) · [升級](#升級) |
 |---|---|
 
-> QwenASR / 停頓觸發辨識 / Windows Vulkan（AMD / Intel / NVIDIA）設定請見 [docs/qwen-vulkan-setup.md](docs/qwen-vulkan-setup.md)。
+> QwenASR / 停頓觸發辨識 / Windows Vulkan（AMD / Intel / NVIDIA）設定請見 [docs/qwen-vulkan-setup.md](docs/qwen-vulkan-setup.md)。Windows 最新版 `install.ps1` 也會自動下載 `chatllm.cpp` 與 `qwen3-asr-1.7b.bin`。
 
 核心功能涵蓋即時語音轉錄、中日英即時翻譯字幕、離線音訊檔批次處理、講者辨識（Speaker Diarization）、以及 LLM 會議摘要產出。採用系統音訊裝置層級擷取（macOS 使用 BlackHole，Windows 使用 WASAPI Loopback），**理論上任何軟體的聲音輸出都能即時處理**：視訊會議（Zoom、Teams、Meet）、YouTube、Podcast、串流影片等，不限定特定應用程式。所有 AI 推論皆由地端模型完成，全程不經過第三方雲端 API。
 
@@ -284,7 +284,7 @@ irm https://raw.githubusercontent.com/sufrank/jt-live-whisper/main/install.ps1 -
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-安裝腳本會自動下載並設定所有地端 AI 模型和相依套件（Whisper 語音辨識模型、Moonshine 串流辨識模型、NLLB 離線翻譯模型、Argos 離線翻譯模型等）。安裝最後會詢問是否設定 GPU 語音辨識伺服器（選填），若有安裝 NVIDIA GPU 的 Ubuntu/Linux 主機（消費級 RTX 4090/5090 亦可，需已安裝 CUDA），可透過 SSH 自動在伺服器安裝 PyTorch、faster-whisper 等套件，大幅加速語音辨識。
+安裝腳本會自動下載並設定所有地端 AI 模型和相依套件（Whisper 語音辨識模型、Moonshine 串流辨識模型、NLLB 離線翻譯模型、Argos 離線翻譯模型等）。Windows 版安裝程式也會一併自動下載 QwenASR Vulkan 後端需要的 `chatllm.cpp` 官方 Windows 二進位與 `GPUModel/qwen3-asr-1.7b.bin`。安裝最後會詢問是否設定 GPU 語音辨識伺服器（選填），若有安裝 NVIDIA GPU 的 Ubuntu/Linux 主機（消費級 RTX 4090/5090 亦可，需已安裝 CUDA），可透過 SSH 自動在伺服器安裝 PyTorch、faster-whisper 等套件，大幅加速語音辨識。
 
 > 首次安裝預估時間：約 10~20 分鐘（視網路速度而定，主要是下載 AI 模型。macOS 需額外編譯 whisper.cpp）
 

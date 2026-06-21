@@ -1,6 +1,14 @@
 # QwenASR Vulkan 設定
 
-若要在 Windows 上使用 `QwenASR` 的 Vulkan 後端（適用 AMD / Intel / NVIDIA GPU），需要另外準備 `chatllm.cpp` 的 Windows 二進位與 `qwen3-asr-1.7b.bin` 模型。
+若要在 Windows 上使用 `QwenASR` 的 Vulkan 後端（適用 AMD / Intel / NVIDIA GPU），最新版 `.\install.ps1` 會自動下載 `chatllm.cpp` 的 Windows 二進位與 `GPUModel/qwen3-asr-1.7b.bin`。
+
+若自動下載失敗，才需要手動準備下列檔案。
+
+參考來源：
+
+- `chatllm.cpp` 官方 Windows release：<https://github.com/foldl/chatllm.cpp/releases>
+- `qwen3-asr-1.7b.bin` 下載來源：<https://huggingface.co/dseditor/Collection/resolve/main/qwen3-asr-1.7b.bin>
+- 參考專案：<https://github.com/dseditor/QwenASRMiniTool>
 
 ## 必要檔案
 

@@ -52,6 +52,9 @@ $SCRIPT_DIR = if ($MyInvocation.MyCommand.Path) {
 }
 $GITHUB_REPO    = "https://github.com/sufrank/jt-live-whisper.git"
 $GITHUB_ZIP     = "https://github.com/sufrank/jt-live-whisper/archive/refs/heads/main.zip"
+$CHATLLM_RELEASE_API = "https://api.github.com/repos/foldl/chatllm.cpp/releases/latest"
+$CHATLLM_ASSET_NAME  = "chatllm_win_x64.7z"
+$QWEN_VULKAN_MODEL_URL = "https://huggingface.co/dseditor/Collection/resolve/main/qwen3-asr-1.7b.bin"
 
 # ─── Bootstrap：透過 irm | iex 執行時，自動下載並安裝 ─────────
 if (-not (Test-Path (Join-Path $SCRIPT_DIR "translate_meeting.py"))) {
@@ -291,6 +294,136 @@ except Exception as e:
     check_notice "${desc}下載失敗，可稍後在有網路時重新執行安裝"
     if ($errMsg) { info "  錯誤詳情: $errMsg" }
     return "fail"
+}
+
+function download_to_file($url, $dest, $desc) {
+    $destDir = Split-Path -Parent $dest
+    if ($destDir -and -not (Test-Path $destDir)) {
+        New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+    }
+
+    $oldProg = $ProgressPreference
+    try {
+        $curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
+        if ($curlExe) {
+            & $curlExe.Source -L --progress-bar -o $dest $url
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $dest) -and ((Get-Item $dest).Length -gt 0)) {
+                return $true
+            }
+        }
+
+        $ProgressPreference = "SilentlyContinue"
+        Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -ErrorAction Stop
+        return ((Test-Path $dest) -and ((Get-Item $dest).Length -gt 0))
+    } catch {
+        check_notice "${desc} 下載失敗：$($_.Exception.Message)"
+        return $false
+    } finally {
+        $ProgressPreference = $oldProg
+    }
+}
+
+function expand_7z_archive($archivePath, $destDir) {
+    if (-not (Test-Path $destDir)) {
+        New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+    }
+
+    $tarExe = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if ($tarExe) {
+        & $tarExe.Source -xf $archivePath -C $destDir 2>$null
+        if ($LASTEXITCODE -eq 0) { return $true }
+    }
+
+    & $VENV_PIP show py7zr 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        info "安裝 py7zr（解壓 chatllm.cpp 需要）..."
+        & $VENV_PIP install --quiet py7zr 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            & $VENV_PIP install py7zr
+            if ($LASTEXITCODE -ne 0) { return $false }
+        }
+    }
+
+    & $VENV_PYTHON -c @"
+import py7zr, sys
+archive = sys.argv[1]
+dest = sys.argv[2]
+with py7zr.SevenZipFile(archive, mode='r') as z:
+    z.extractall(path=dest)
+"@ $archivePath $destDir 2>$null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function ensure_qwen_vulkan_assets() {
+    $chatllmDir = Join-Path $SCRIPT_DIR "chatllm"
+    $gpuModelDir = Join-Path $SCRIPT_DIR "GPUModel"
+    $chatllmExe = Join-Path $chatllmDir "main.exe"
+    $chatllmVkDll = Join-Path $chatllmDir "ggml-vulkan.dll"
+    $qwenModelPath = Join-Path $gpuModelDir "qwen3-asr-1.7b.bin"
+
+    section "安裝 QwenASR Vulkan 後端"
+
+    if ((Test-Path $chatllmExe) -and (Test-Path $chatllmVkDll)) {
+        check_ok "chatllm.cpp（Windows Vulkan 二進位，已安裝）"
+    } else {
+        info "下載 chatllm.cpp Windows Vulkan 二進位..."
+        $release = $null
+        try {
+            $release = (Invoke-WebRequest -Uri $CHATLLM_RELEASE_API -UseBasicParsing -ErrorAction Stop).Content | ConvertFrom-Json
+        } catch {
+            check_notice "無法查詢 chatllm.cpp 最新 release：$($_.Exception.Message)"
+        }
+
+        $asset = $null
+        if ($release -and $release.assets) {
+            $asset = $release.assets | Where-Object { $_.name -eq $CHATLLM_ASSET_NAME } | Select-Object -First 1
+        }
+
+        if (-not $asset) {
+            check_notice "找不到 chatllm.cpp release 資產：$CHATLLM_ASSET_NAME"
+        } else {
+            $tmpArchive = Join-Path $env:TEMP ("chatllm_win_x64_{0}.7z" -f (Get-Random))
+            $tmpExtract = Join-Path $env:TEMP ("chatllm_extract_{0}" -f (Get-Random))
+            try {
+                if (download_to_file $asset.browser_download_url $tmpArchive "chatllm.cpp") {
+                    if (expand_7z_archive $tmpArchive $tmpExtract) {
+                        if (-not (Test-Path $chatllmDir)) {
+                            New-Item -ItemType Directory -Path $chatllmDir -Force | Out-Null
+                        }
+                        Get-ChildItem $tmpExtract -File | ForEach-Object {
+                            Copy-Item $_.FullName (Join-Path $chatllmDir $_.Name) -Force
+                        }
+                        if ((Test-Path $chatllmExe) -and (Test-Path $chatllmVkDll)) {
+                            check_ok "chatllm.cpp（$($release.tag_name)）"
+                        } else {
+                            check_notice "chatllm.cpp 已下載，但缺少必要檔案（main.exe / ggml-vulkan.dll）"
+                        }
+                    } else {
+                        check_notice "chatllm.cpp 解壓失敗（.7z）"
+                    }
+                } else {
+                    check_notice "chatllm.cpp 下載失敗"
+                }
+            } finally {
+                Remove-Item $tmpArchive -Force -ErrorAction SilentlyContinue
+                Remove-Item $tmpExtract -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    if (Test-Path $qwenModelPath) {
+        check_ok "qwen3-asr-1.7b.bin（已安裝）"
+    } else {
+        info "下載 qwen3-asr-1.7b.bin（約 2.3 GB）..."
+        if (-not (Test-Path $gpuModelDir)) {
+            New-Item -ItemType Directory -Path $gpuModelDir -Force | Out-Null
+        }
+        if (download_to_file $QWEN_VULKAN_MODEL_URL $qwenModelPath "qwen3-asr-1.7b.bin") {
+            check_ok "qwen3-asr-1.7b.bin"
+        } else {
+            check_notice "qwen3-asr-1.7b.bin 下載失敗，可稍後重新執行 .\\install.ps1"
+        }
+    }
 }
 
 # ─── Banner ───────────────────────────────────────────────────
@@ -913,6 +1046,8 @@ if ($installFailed.Count -gt 0) {
     foreach ($f in $installFailed) { info "  - $f" }
     Write-Host ""
 }
+
+ensure_qwen_vulkan_assets
 
 # ═══════════════════════════════════════════════════════════════
 # 4. 下載 Argos 翻譯模型
