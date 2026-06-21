@@ -813,6 +813,7 @@ QWEN_BACKENDS = [
 
 DEFAULT_CHUNK_MODE = "pause_vad"
 DEFAULT_QWEN_BACKEND = "auto"
+DEFAULT_QWEN_MODEL_HINT = "1.7b"
 DEFAULT_PAUSE_MS = 800
 DEFAULT_MIN_SPEECH_MS = 250
 DEFAULT_MAX_SEGMENT_MS = 12000
@@ -1105,6 +1106,19 @@ class _QwenVulkanRunner:
         return output.split("<asr_text>", 1)[1].strip()
 
 
+def _is_qwen_vulkan_oom_error(exc):
+    text = str(exc or "")
+    markers = (
+        "ErrorOutOfDeviceMemory",
+        "outofdevicememory",
+        "failed to allocate buffer",
+        "device memory allocation",
+        "alloc() failed to allocate buffer",
+    )
+    lower = text.lower()
+    return any(m.lower() in lower for m in markers)
+
+
 _QWEN_MODEL_CACHE = {}
 
 
@@ -1117,10 +1131,12 @@ def _qwen_language_name(lang):
 
 
 def _resolve_qwen_model_repo(model_hint=None):
-    hint = (model_hint or "").lower()
+    hint = (model_hint or DEFAULT_QWEN_MODEL_HINT).lower()
+    if "0.6" in hint or "0_6" in hint:
+        return "Qwen/Qwen3-ASR-0.6B"
     if "1.7" in hint or "1_7" in hint:
         return "Qwen/Qwen3-ASR-1.7B"
-    return "Qwen/Qwen3-ASR-0.6B"
+    return "Qwen/Qwen3-ASR-1.7B"
 
 
 def _qwen_model_display_name(model_hint=None, runtime="python", vulkan_model_path=None):
@@ -1129,6 +1145,10 @@ def _qwen_model_display_name(model_hint=None, runtime="python", vulkan_model_pat
             return f"Vulkan {os.path.basename(vulkan_model_path)}"
         return "Vulkan qwen3-asr-1.7b.bin"
     return _resolve_qwen_model_repo(model_hint).replace("Qwen/", "")
+
+
+def _qwen_runtime_display_name(runtime):
+    return "Vulkan" if runtime == "vulkan" else "Python"
 
 
 def _load_qwen_asr_model(model_hint=None, with_timestamps=False):
@@ -6829,6 +6849,7 @@ def run_stream_local_qwen(capture_id: int, translator,
     # ── 載入 QwenASR 模型 / Vulkan runner ──
     qwen_runtime = _select_qwen_runtime(qwen_backend)
     qwen_runner = None
+    qwen_model = None
     if qwen_backend == "openvino":
         print(f"\n{C_WARN}[提示] OpenVINO 後端尚未整合，先改用可用後端。{RESET}")
 
@@ -6845,11 +6866,28 @@ def run_stream_local_qwen(capture_id: int, translator,
         print(f"\n{C_DIM}正在載入 QwenASR Vulkan 模型 ({os.path.basename(model_path)})...{RESET}", end="", flush=True)
         _webui_send({"type": "progress", "stage": "載入中",
                      "detail": f"QwenASR Vulkan（{device_name}）",
-                     "actual_model": _qwen_model_display_name(runtime="vulkan", vulkan_model_path=model_path)})
+                     "actual_model": _qwen_model_display_name(runtime="vulkan", vulkan_model_path=model_path),
+                     "actual_backend": _qwen_runtime_display_name("vulkan")})
         t0 = time.monotonic()
-        qwen_runner = _QwenVulkanRunner(model_path=model_path, chatllm_dir=s["chatllm_dir"], device_id=device_id)
-        print(f" {C_OK}完成（{time.monotonic() - t0:.1f}s）{RESET}")
-        qwen_repo = _qwen_model_display_name(runtime="vulkan", vulkan_model_path=model_path)
+        try:
+            qwen_runner = _QwenVulkanRunner(model_path=model_path, chatllm_dir=s["chatllm_dir"], device_id=device_id)
+            print(f" {C_OK}完成（{time.monotonic() - t0:.1f}s）{RESET}")
+            qwen_repo = _qwen_model_display_name(runtime="vulkan", vulkan_model_path=model_path)
+        except Exception as e:
+            can_fallback = (qwen_backend != "vulkan" and _has_qwen_asr_package() and _is_qwen_vulkan_oom_error(e))
+            if not can_fallback:
+                raise
+            print(f" {C_WARN}Vulkan 顯存不足，改用官方 Python 後端{RESET}")
+            qwen_runtime = "python"
+            qwen_repo = _qwen_model_display_name(model_hint, runtime="python")
+            print(f"{C_DIM}正在載入 QwenASR 模型 ({qwen_repo})...{RESET}", end="", flush=True)
+            _webui_send({"type": "progress", "stage": "載入中",
+                         "detail": f"QwenASR 模型（{qwen_repo}）",
+                         "actual_model": _qwen_model_display_name(model_hint, runtime="python"),
+                         "actual_backend": _qwen_runtime_display_name("python")})
+            t0 = time.monotonic()
+            qwen_model = _load_qwen_asr_model(model_hint, with_timestamps=False)
+            print(f" {C_OK}完成（{time.monotonic() - t0:.1f}s）{RESET}")
     else:
         print(f"\n{C_DIM}正在載入 QwenASR 模型 ({qwen_repo})...{RESET}", end="", flush=True)
         _webui_send({"type": "progress", "stage": "載入中",
@@ -6972,6 +7010,29 @@ def run_stream_local_qwen(capture_id: int, translator,
     pause_event = threading.Event()
     global _webui_pause_event; _webui_pause_event = pause_event
     print_lock = threading.Lock()
+
+    def _fallback_qwen_vulkan_to_python():
+        nonlocal qwen_runtime, qwen_runner, qwen_model, qwen_repo
+        if qwen_runtime != "vulkan":
+            return False
+        if qwen_backend == "vulkan" or not _has_qwen_asr_package():
+            return False
+        qwen_runtime = "python"
+        qwen_runner = None
+        qwen_repo = _qwen_model_display_name(model_hint, runtime="python")
+        with print_lock:
+            print(f"{C_WARN}[降級] QwenASR Vulkan 顯存不足，改用官方 Python 後端{RESET}", flush=True)
+            print(f"{C_DIM}  正在載入 QwenASR 模型 ({qwen_repo})...{RESET}", end="", flush=True)
+        t0 = time.monotonic()
+        qwen_model = _load_qwen_asr_model(model_hint, with_timestamps=False)
+        with print_lock:
+            print(f" {C_OK}完成（{time.monotonic() - t0:.1f}s）{RESET}", flush=True)
+        _webui_send({"type": "progress", "stage": "載入中",
+                     "detail": f"QwenASR 模型（{qwen_repo}）",
+                     "actual_model": _qwen_model_display_name(model_hint, runtime="python"),
+                     "actual_backend": _qwen_runtime_display_name("python")})
+        return True
+
     setup_terminal_raw_input()
     kp_thread = threading.Thread(
         target=keypress_listener_thread,
@@ -7071,8 +7132,22 @@ def run_stream_local_qwen(capture_id: int, translator,
     def local_transcribe(wav_path):
         t0 = time.monotonic()
         if qwen_runtime == "vulkan":
-            full_text = qwen_runner.transcribe(wav_path, language=qwen_lang).strip()
-            segments = [{"start": 0.0, "end": 0.0, "text": full_text}] if full_text else []
+            try:
+                full_text = qwen_runner.transcribe(wav_path, language=qwen_lang).strip()
+                segments = [{"start": 0.0, "end": 0.0, "text": full_text}] if full_text else []
+            except Exception as e:
+                if not (_is_qwen_vulkan_oom_error(e) and _fallback_qwen_vulkan_to_python()):
+                    raise
+                results = _call_with_ssl_retry(
+                    qwen_model.transcribe,
+                    audio=wav_path,
+                    language=qwen_lang,
+                    return_time_stamps=False,
+                )
+                result = results[0] if isinstance(results, (list, tuple)) else results
+                segments = _qwen_result_segments(result)
+                texts = [seg.get("text", "").strip() for seg in segments if seg.get("text", "").strip()]
+                full_text = " ".join(texts).strip() if texts else (getattr(result, "text", None) or "").strip()
         else:
             results = _call_with_ssl_retry(
                 qwen_model.transcribe,
@@ -7313,7 +7388,8 @@ def run_stream_local_qwen(capture_id: int, translator,
         "ja": "說日文即可看到字幕",
     }
     print(f"\n{C_OK}{BOLD}開始監聽...{RESET} {C_WHITE}{listen_hints.get(mode, '')}{RESET}\n\n", flush=True)
-    _webui_send({"type": "started", "mode": mode, "actual_model": qwen_repo})
+    _webui_send({"type": "started", "mode": mode, "actual_model": qwen_repo,
+                 "actual_backend": _qwen_runtime_display_name(qwen_runtime)})
 
     _tr_model = translator.model if isinstance(translator, OllamaTranslator) else ("NLLB" if isinstance(translator, NllbTranslator) else ("Argos" if isinstance(translator, ArgosTranslator) else ""))
     _tr_loc = "伺服器" if isinstance(translator, OllamaTranslator) else ("本機" if isinstance(translator, (ArgosTranslator, NllbTranslator)) else "")
@@ -11016,6 +11092,7 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
         qwen_runtime = _select_qwen_runtime(qwen_backend)
         qwen_repo = _resolve_qwen_model_repo(model_size)
         qwen_runner = None
+        qwen_model = None
         if qwen_backend == "openvino":
             print(f"  {C_WARN}[提示] OpenVINO 後端尚未整合，先改用可用後端。{RESET}")
 
@@ -11035,12 +11112,32 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
             qwen_model_used = qwen_repo
             print(f"  {C_WHITE}辨識位置    本機（QwenASR Vulkan: {device_name}）{RESET}")
             print(f"  {C_WHITE}載入模型    {qwen_repo}...{RESET}", end=" ", flush=True)
-            qwen_runner = _QwenVulkanRunner(model_path=model_path, chatllm_dir=s["chatllm_dir"], device_id=device_id)
-            print(f"{C_OK}✓{RESET}")
-            print(f"  {C_WHITE}辨識中...{RESET}\n")
-            _webui_send({"type": "progress", "stage": "辨識中",
-                         "detail": f"本機 QwenASR Vulkan",
-                         "actual_model": qwen_model_used})
+            try:
+                qwen_runner = _QwenVulkanRunner(model_path=model_path, chatllm_dir=s["chatllm_dir"], device_id=device_id)
+                print(f"{C_OK}✓{RESET}")
+                print(f"  {C_WHITE}辨識中...{RESET}\n")
+                _webui_send({"type": "progress", "stage": "辨識中",
+                             "detail": f"本機 QwenASR Vulkan",
+                             "actual_model": qwen_model_used,
+                             "actual_backend": _qwen_runtime_display_name("vulkan")})
+            except Exception as e:
+                can_fallback = (qwen_backend != "vulkan" and _has_qwen_asr_package() and _is_qwen_vulkan_oom_error(e))
+                if not can_fallback:
+                    raise
+                qwen_runtime = "python"
+                qwen_runtime_used = "python"
+                qwen_model_used = _qwen_model_display_name(model_size, runtime="python")
+                qwen_repo = qwen_model_used
+                print(f"{C_WARN}Vulkan 顯存不足，改用官方 Python 後端{RESET}")
+                print(f"  {C_WHITE}辨識位置    本機（QwenASR）{RESET}")
+                print(f"  {C_WHITE}載入模型    {qwen_repo}...{RESET}", end=" ", flush=True)
+                qwen_model = _load_qwen_asr_model(model_size, with_timestamps=True)
+                print(f"{C_OK}✓{RESET}")
+                print(f"  {C_WHITE}辨識中...{RESET}\n")
+                _webui_send({"type": "progress", "stage": "辨識中",
+                             "detail": f"本機 QwenASR",
+                             "actual_model": qwen_model_used,
+                             "actual_backend": _qwen_runtime_display_name("python")})
         else:
             qwen_runtime_used = "python"
             qwen_model_used = _qwen_model_display_name(model_size, runtime="python")
@@ -11051,7 +11148,8 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
             print(f"  {C_WHITE}辨識中...{RESET}\n")
             _webui_send({"type": "progress", "stage": "辨識中",
                          "detail": f"本機 QwenASR",
-                         "actual_model": qwen_model_used})
+                         "actual_model": qwen_model_used,
+                         "actual_backend": _qwen_runtime_display_name("python")})
 
         sbar = _SummaryStatusBar(model=qwen_repo, task="辨識中", asr_location="本機").start()
         if audio_duration > 0:
@@ -11059,9 +11157,32 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
         qwen_lang = _qwen_language_name(lang)
         qwen_t0 = time.monotonic()
         if qwen_runtime == "vulkan":
-            full_text = qwen_runner.transcribe(asr_wav_path, language=qwen_lang).strip()
-            raw_segments = ([{"start": 0.0, "end": float(audio_duration or 0.0), "text": full_text}]
-                            if full_text else [])
+            try:
+                full_text = qwen_runner.transcribe(asr_wav_path, language=qwen_lang).strip()
+                raw_segments = ([{"start": 0.0, "end": float(audio_duration or 0.0), "text": full_text}]
+                                if full_text else [])
+            except Exception as e:
+                can_fallback = (qwen_backend != "vulkan" and _has_qwen_asr_package() and _is_qwen_vulkan_oom_error(e))
+                if not can_fallback:
+                    raise
+                print(f"  {C_WARN}[降級] QwenASR Vulkan 顯存不足，改用官方 Python 後端{RESET}")
+                qwen_runtime = "python"
+                qwen_runtime_used = "python"
+                qwen_model_used = _qwen_model_display_name(model_size, runtime="python")
+                qwen_repo = qwen_model_used
+                qwen_model = _load_qwen_asr_model(model_size, with_timestamps=True)
+                _webui_send({"type": "progress", "stage": "辨識中",
+                             "detail": f"本機 QwenASR",
+                             "actual_model": qwen_model_used,
+                             "actual_backend": _qwen_runtime_display_name("python")})
+                results = _call_with_ssl_retry(
+                    qwen_model.transcribe,
+                    audio=asr_wav_path,
+                    language=qwen_lang,
+                    return_time_stamps=True,
+                )
+                result = results[0] if isinstance(results, (list, tuple)) else results
+                raw_segments = _qwen_result_segments(result, audio_duration=audio_duration)
         else:
             results = _call_with_ssl_retry(
                 qwen_model.transcribe,
