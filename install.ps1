@@ -328,12 +328,6 @@ function expand_7z_archive($archivePath, $destDir) {
         New-Item -ItemType Directory -Path $destDir -Force | Out-Null
     }
 
-    $tarExe = Get-Command tar.exe -ErrorAction SilentlyContinue
-    if ($tarExe) {
-        & $tarExe.Source -xf $archivePath -C $destDir 2>$null
-        if ($LASTEXITCODE -eq 0) { return $true }
-    }
-
     & $VENV_PIP show py7zr 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
         info "安裝 py7zr（解壓 chatllm.cpp 需要）..."
@@ -390,7 +384,7 @@ function ensure_qwen_vulkan_assets() {
                         if (-not (Test-Path $chatllmDir)) {
                             New-Item -ItemType Directory -Path $chatllmDir -Force | Out-Null
                         }
-                        Get-ChildItem $tmpExtract -File | ForEach-Object {
+                        Get-ChildItem $tmpExtract -Recurse -File | ForEach-Object {
                             Copy-Item $_.FullName (Join-Path $chatllmDir $_.Name) -Force
                         }
                         if ((Test-Path $chatllmExe) -and (Test-Path $chatllmVkDll)) {
